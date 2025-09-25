@@ -1,0 +1,47 @@
+\documentclass{article}
+
+\usepackage{amsfonts, amsmath, amsthm}
+\usepackage[letterpaper, total={6in, 9in}]{geometry}
+\usepackage[noend]{algorithmic}
+\usepackage[vlined,ruled,linesnumbered]{algorithm2e}
+
+%% preamble packages and symbols
+\input{preamble_packages}
+\input{preamble_symbols}
+
+\usepackage[pagebackref=true,breaklinks=true,letterpaper=true,colorlinks,bookmarks=false]{hyperref}
+
+%% it is often convenient to define shortcuts for some important notations
+\input{shortcuts.tex}
+
+\title{Sample Report}
+
+\author{Your Name}
+
+\begin{document}
+\maketitle
+
+%% Abstract
+\input{sections/abstract.tex}
+
+%% Main sections
+\input{sections/introduction.tex}
+\input{sections/related-work.tex}
+\input{sections/formulation.tex}
+\input{sections/method.tex}
+\input{sections/experiments.tex}
+\input{sections/conclusion.tex}
+
+\clearpage
+%% Appendix
+\begin{center}
+    {\Large\bf Appendix}
+\end{center}
+\appendix
+\input{sections/app-proof-convergence.tex}
+
+%% References
+\bibliographystyle{plain}
+\bibliography{refs}
+
+\end{document}
