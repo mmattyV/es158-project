@@ -109,25 +109,25 @@ class PowerGridEnv(gym.Env):
         # Create a connected graph structure
         for i in range(self.n_buses):
             # Self admittance (diagonal elements)
-            self.admittance_matrix[i, i] = torch.rand(1, device=self.device) * 10.0 + 5.0
+            self.admittance_matrix[i, i] = (torch.rand(1, device=self.device) * 10.0 + 5.0).item()
             
             # Connect to nearby buses (simplified ring + radial structure)
             if i < self.n_buses - 1:
-                admittance = torch.rand(1, device=self.device) * 2.0 + 1.0
-                self.admittance_matrix[i, i+1] = -admittance
-                self.admittance_matrix[i+1, i] = -admittance
-                self.admittance_matrix[i, i] += admittance
-                self.admittance_matrix[i+1, i+1] += admittance
+                admittance_val = (torch.rand(1, device=self.device) * 2.0 + 1.0).item()
+                self.admittance_matrix[i, i+1] = -admittance_val
+                self.admittance_matrix[i+1, i] = -admittance_val
+                self.admittance_matrix[i, i] += admittance_val
+                self.admittance_matrix[i+1, i+1] += admittance_val
         
         # Add some additional connections for robustness
         for _ in range(self.n_buses // 4):
-            i, j = torch.randint(0, self.n_buses, (2,))
+            i, j = torch.randint(0, self.n_buses, (2,)).tolist()
             if i != j:
-                admittance = torch.rand(1, device=self.device) * 1.0 + 0.5
-                self.admittance_matrix[i, j] = -admittance
-                self.admittance_matrix[j, i] = -admittance
-                self.admittance_matrix[i, i] += admittance
-                self.admittance_matrix[j, j] += admittance
+                admittance_val = (torch.rand(1, device=self.device) * 1.0 + 0.5).item()
+                self.admittance_matrix[i, j] = -admittance_val
+                self.admittance_matrix[j, i] = -admittance_val
+                self.admittance_matrix[i, i] += admittance_val
+                self.admittance_matrix[j, j] += admittance_val
         
         # Agent-to-bus mapping (which buses have controllable agents)
         self.agent_bus_mapping = torch.randint(0, self.n_buses, (self.n_agents,), device=self.device)
