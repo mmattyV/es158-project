@@ -1,3 +1,4 @@
+# LaTeX auxiliary files
 *main.aux
 *main.fdb_latexmk
 *main.fls
@@ -7,6 +8,22 @@
 *main.pdf
 *main.bbl
 *main.blg
-*.tar.gz
 *main.brf
+*Proposal.aux
+*Proposal.fdb_latexmk
+*Proposal.fls
+*Proposal.log
+*Proposal.out
+*Proposal.synctex.gz
+*Proposal.bbl
+*Proposal.blg
+*Proposal.brf
+*.tar.gz
 *.DS_Store
+/venv/
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
