@@ -453,7 +453,8 @@ class PowerGridEnv(gym.Env):
             current_gen = self.renewable_generation[i]
             
             # Add trend (seasonal pattern)
-            trend = 10.0 * torch.sin(2 * math.pi * self.current_hour / 24.0)  # Daily pattern
+            hour_tensor = torch.tensor(self.current_hour, device=self.device)
+            trend = 10.0 * torch.sin(2 * math.pi * hour_tensor / 24.0)  # Daily pattern
             
             # Add noise
             noise = torch.randn(self.forecast_horizon, device=self.device) * 20.0
@@ -488,10 +489,15 @@ class PowerGridEnv(gym.Env):
         # Time features (8): hour, day, hour_sin, hour_cos, day_sin, day_cos, load_pattern, renewable_pattern
         state[idx] = self.current_hour / 24.0  # Normalized hour
         state[idx+1] = self.current_day / 7.0  # Normalized day
-        state[idx+2] = torch.sin(2 * math.pi * self.current_hour / 24.0)  # Hour sine
-        state[idx+3] = torch.cos(2 * math.pi * self.current_hour / 24.0)  # Hour cosine
-        state[idx+4] = torch.sin(2 * math.pi * self.current_day / 7.0)   # Day sine
-        state[idx+5] = torch.cos(2 * math.pi * self.current_day / 7.0)   # Day cosine
+        
+        # Convert to tensors for torch trig functions
+        hour_tensor = torch.tensor(self.current_hour, device=self.device)
+        day_tensor = torch.tensor(self.current_day, device=self.device)
+        
+        state[idx+2] = torch.sin(2 * math.pi * hour_tensor / 24.0)  # Hour sine
+        state[idx+3] = torch.cos(2 * math.pi * hour_tensor / 24.0)  # Hour cosine
+        state[idx+4] = torch.sin(2 * math.pi * day_tensor / 7.0)   # Day sine
+        state[idx+5] = torch.cos(2 * math.pi * day_tensor / 7.0)   # Day cosine
         state[idx+6] = torch.mean(self.loads)  # Average load pattern
         state[idx+7] = torch.mean(self.renewable_generation)  # Average renewable pattern
         
