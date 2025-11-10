@@ -3,6 +3,7 @@ Power Grid Environment Dashboard
 
 Interactive dashboard for visualizing and controlling the multi-agent power grid environment.
 Features real-time plots, grid topology, agent controls, and key metrics.
+Supports loading trained MAPPO agents for evaluation.
 """
 
 import matplotlib.pyplot as plt
@@ -13,21 +14,33 @@ import torch
 from power_grid_env import PowerGridEnv
 from collections import deque
 import time
+import os
 
 
 class PowerGridDashboard:
     """Interactive dashboard for the power grid environment."""
     
-    def __init__(self, env=None, max_history=200):
+    def __init__(self, env=None, max_history=200, agent=None, model_path=None):
         """
         Initialize the dashboard.
         
         Args:
             env: PowerGridEnv instance (creates new one if None)
             max_history: Maximum number of time steps to keep in history
+            agent: Trained MAPPO agent (optional)
+            model_path: Path to trained model checkpoint (optional, loads if provided)
         """
         self.env = env if env is not None else PowerGridEnv()
         self.max_history = max_history
+        
+        # AI Agent support
+        self.agent = agent
+        self.model_path = model_path
+        self.control_mode = 'manual'  # Options: 'manual', 'random', 'ai'
+        
+        # Load model if path provided
+        if model_path is not None and agent is None:
+            self._load_agent(model_path)
         
         # Data storage for real-time plotting
         self.time_history = deque(maxlen=max_history)
@@ -50,11 +63,45 @@ class PowerGridDashboard:
         # Create the dashboard
         self._create_dashboard()
     
+    def _load_agent(self, model_path):
+        """Load a trained MAPPO agent from checkpoint."""
+        try:
+            from mappo import MAPPO
+            
+            if not os.path.exists(model_path):
+                print(f"⚠️  Model file not found: {model_path}")
+                print("   Dashboard will run without AI agent.")
+                return
+            
+            device = self.env.device
+            self.agent = MAPPO(
+                n_agents=self.env.n_agents,
+                obs_dim=self.env.obs_dim,
+                state_dim=self.env.state_dim,
+                action_dim=1,
+                device=device
+            )
+            
+            self.agent.load(model_path)
+            self.control_mode = 'ai'  # Default to AI mode if model loaded
+            print(f"✓ Loaded trained agent from: {model_path}")
+            print(f"  Control mode: AI Agent")
+            
+        except Exception as e:
+            print(f"⚠️  Error loading agent: {e}")
+            print("   Dashboard will run without AI agent.")
+            self.agent = None
+    
     def _create_dashboard(self):
         """Create the matplotlib dashboard interface."""
         # Create figure with subplots
         self.fig = plt.figure(figsize=(16, 12))
-        self.fig.suptitle('Power Grid Multi-Agent RL Dashboard', fontsize=16, fontweight='bold')
+        
+        # Dynamic title based on control mode
+        title = 'Power Grid Multi-Agent RL Dashboard'
+        if self.agent is not None:
+            title += ' - 🤖 AI Agent Loaded'
+        self.fig.suptitle(title, fontsize=16, fontweight='bold')
         
         # Create grid layout
         gs = self.fig.add_gridspec(4, 4, hspace=0.3, wspace=0.3)
@@ -202,13 +249,51 @@ class PowerGridDashboard:
         self.btn_reset.on_clicked(self._reset_environment)
         self.btn_step.on_clicked(self._step_once)
         
+        # Control mode toggle button
+        ax_mode = plt.axes([0.55, 0.08, 0.35, 0.04])
+        self.btn_mode = Button(ax_mode, self._get_mode_button_text())
+        self.btn_mode.on_clicked(self._toggle_control_mode)
+        
         # Agent action sliders (simplified - show first 5 agents)
+        # Only active in manual mode
         self.agent_sliders = []
         for i in range(min(5, self.env.n_agents)):
             ax_slider = plt.axes([0.55, 0.35 - i*0.04, 0.35, 0.02])
             slider = Slider(ax_slider, f'Agent {i+1}', -1.0, 1.0, valinit=0.0)
             slider.on_changed(lambda val, idx=i: self._update_agent_action(idx, val))
             self.agent_sliders.append(slider)
+    
+    def _get_mode_button_text(self):
+        """Get the text for the control mode button."""
+        mode_icons = {
+            'manual': '🎮',
+            'random': '🎲',
+            'ai': '🤖'
+        }
+        mode_names = {
+            'manual': 'Manual',
+            'random': 'Random',
+            'ai': 'AI Agent'
+        }
+        
+        icon = mode_icons.get(self.control_mode, '')
+        name = mode_names.get(self.control_mode, 'Unknown')
+        return f'{icon} Mode: {name} (click to change)'
+    
+    def _toggle_control_mode(self, event):
+        """Toggle between control modes."""
+        modes = ['manual', 'random']
+        if self.agent is not None:
+            modes.append('ai')
+        
+        current_idx = modes.index(self.control_mode)
+        next_idx = (current_idx + 1) % len(modes)
+        self.control_mode = modes[next_idx]
+        
+        # Update button text
+        self.btn_mode.label.set_text(self._get_mode_button_text())
+        
+        print(f"Control mode changed to: {self.control_mode}")
     
     def _update_agent_action(self, agent_idx, value):
         """Update action for a specific agent."""
@@ -235,10 +320,16 @@ class PowerGridDashboard:
     
     def _step_environment(self):
         """Execute one step of the environment."""
-        # Use current actions or random actions if running automatically
-        if self.is_running:
+        # Get actions based on control mode
+        if self.control_mode == 'ai' and self.agent is not None:
+            # Use trained AI agent
+            state = self.env.get_full_state().cpu().numpy()
+            actions, _, _ = self.agent.select_action(self.obs, state, deterministic=True)
+        elif self.control_mode == 'random':
+            # Random actions
             actions = np.random.uniform(-0.5, 0.5, size=self.env.n_agents)
         else:
+            # Manual control from sliders
             actions = self.current_actions.copy()
         
         # Step environment
@@ -355,8 +446,17 @@ class PowerGridDashboard:
         self.ax_controls.clear()
         self.ax_controls.axis('off')
         
+        # Control mode indicator
+        mode_icons = {'manual': '🎮', 'random': '🎲', 'ai': '🤖'}
+        mode_names = {'manual': 'Manual Control', 'random': 'Random Actions', 'ai': 'AI Agent'}
+        mode_icon = mode_icons.get(self.control_mode, '')
+        mode_name = mode_names.get(self.control_mode, 'Unknown')
+        
         # Current metrics
         metrics_text = f"""
+CONTROL MODE: {mode_icon} {mode_name}
+{'=' * 40}
+
 CURRENT METRICS
 Step: {self.current_step}
 Time: {self.info.get('current_hour', 0):.1f}h, Day {self.info.get('current_day', 0):.0f}
@@ -395,21 +495,50 @@ Active: {self.info['contingency_active']}
 
 def main():
     """Run the dashboard."""
-    print("Initializing Power Grid Dashboard...")
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='Power Grid Dashboard')
+    parser.add_argument('--model', type=str, default=None,
+                       help='Path to trained MAPPO model (e.g., checkpoints/best_model.pt)')
+    parser.add_argument('--device', type=str, default='auto',
+                       help='Device: cpu, cuda, or auto')
+    
+    args = parser.parse_args()
+    
+    print("=" * 60)
+    print("POWER GRID DASHBOARD")
+    print("=" * 60)
+    
+    # Set device
+    if args.device == 'auto':
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    else:
+        device = args.device
+    
+    print(f"Device: {device}")
     
     # Create environment
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
     env = PowerGridEnv(device=device)
     
     # Create and show dashboard
-    dashboard = PowerGridDashboard(env)
+    dashboard = PowerGridDashboard(env, model_path=args.model)
     
-    print("Dashboard ready! Use the controls to interact with the environment.")
-    print("- Start/Stop: Automatic simulation")
-    print("- Reset: Reset environment")
-    print("- Step: Single step")
-    print("- Sliders: Manual agent control")
+    print("\n" + "=" * 60)
+    print("DASHBOARD CONTROLS")
+    print("=" * 60)
+    print("- Start/Stop: Run/pause automatic simulation")
+    print("- Reset: Reset environment to initial state")
+    print("- Step: Execute single time step")
+    print("- Mode Toggle: Switch between Manual/Random/AI control")
+    print("- Sliders: Manual control for first 5 agents")
+    print("=" * 60)
     
+    if dashboard.agent is not None:
+        print("\n🤖 AI Agent loaded! Switch to AI mode to watch it control the grid.")
+    else:
+        print("\n💡 Tip: Load a trained model with --model checkpoints/best_model.pt")
+    
+    print("\nStarting dashboard...\n")
     dashboard.show()
 
 
