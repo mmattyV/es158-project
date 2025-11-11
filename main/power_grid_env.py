@@ -76,7 +76,7 @@ class PowerGridEnv(gym.Env):
         
         # Power system parameters
         self.nominal_frequency = 60.0  # Hz
-        self.base_power = 100.0  # MVA base
+        self.base_power = 10000.0  # MVA base (scaled to match system size ~5000 MW)
         self.inertia_constants = torch.rand(n_buses, device=self.device) * 5.0 + 2.0  # H in seconds
         
         # Grid topology - simplified admittance matrix (68x68)
