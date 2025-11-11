@@ -137,8 +137,8 @@ class Trainer:
             self.episode_rewards.append(episode_reward)
             self.episode_lengths.append(episode_length)
             
-            # Update policy when buffer is full enough
-            if self.buffer.ptr >= self.batch_size or self.buffer.full:
+            # Update policy when buffer is full (standard MAPPO: collect full rollout before updating)
+            if self.buffer.full:
                 stats = self.agent.update(self.buffer, n_epochs=self.n_epochs, batch_size=self.batch_size)
                 self.buffer.clear()
                 
@@ -180,6 +180,13 @@ class Trainer:
         
         print("\nTraining completed!")
         print(f"Best evaluation reward: {best_eval_reward:.2f}")
+        
+        # Final update with any remaining data in buffer (if buffer has enough samples)
+        if self.buffer.ptr >= self.batch_size:
+            stats = self.agent.update(self.buffer, n_epochs=self.n_epochs, batch_size=self.batch_size)
+            if stats:
+                self.actor_losses.append(stats['actor_loss'])
+                self.critic_losses.append(stats['critic_loss'])
         
         # Save final model and statistics
         self.agent.save(os.path.join(self.save_dir, 'final_model.pt'))

@@ -105,7 +105,7 @@ class RolloutBuffer:
                 next_non_terminal = 1.0 - self.dones[t]
             else:
                 next_value = self.values[t + 1]
-                next_non_terminal = 1.0 - self.dones[t]
+                next_non_terminal = 1.0 - self.dones[t + 1]
             
             # TD error
             delta = self.rewards[t] + gamma * next_value * next_non_terminal - self.values[t]

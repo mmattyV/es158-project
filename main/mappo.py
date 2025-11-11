@@ -151,7 +151,7 @@ class MAPPO:
                 
                 # ===== Update Critic =====
                 values = self.critic(states)
-                value_loss = nn.MSELoss()(values, returns)
+                value_loss = self.value_coef * nn.MSELoss()(values, returns)
                 
                 self.critic_optimizer.zero_grad()
                 value_loss.backward()
