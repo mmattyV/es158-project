@@ -9,6 +9,13 @@ This environment simulates a 68-bus power grid with 20 agents:
 State space: 140-dimensional (bus frequencies, generator outputs, loads)
 Each agent observes: 15-dimensional local observation
 Actions: 20 continuous power changes ΔP^i within ramp rate limits
+
+Key Features (Aligned with Proposal):
+- Correct swing equation: df/dt = P_imbalance / (2*H*S_base)
+- Total system load: 2000-5000 MW (distributed across 68 buses)
+- Communication delay: 2 seconds (SCADA delay)
+- Graduated response: exponential penalties + lenient termination (±1.5 Hz)
+- No artificial frequency clamping - realistic physics
 """
 
 import gymnasium as gym
@@ -26,7 +33,7 @@ class PowerGridEnv(gym.Env):
     def __init__(self, 
                  n_buses: int = 68,
                  n_agents: int = 20,
-                 dt: float = 1.0,  # time step in minutes
+                 dt: float = 2.0/60.0,  # time step in minutes (2 seconds)
                  frequency_bounds: Tuple[float, float] = (59.5, 60.5),
                  load_range: Tuple[float, float] = (2000.0, 5000.0),
                  contingency_prob: float = 0.001,
@@ -90,7 +97,7 @@ class PowerGridEnv(gym.Env):
         )
         
         # Communication delay buffer (2-second SCADA delay)
-        self.delay_steps = 2  # 2 time steps delay
+        self.delay_steps = 1  # 1 time step × 2 seconds = 2 second delay
         self.observation_buffer = []
         
         # Renewable forecast parameters
@@ -156,9 +163,12 @@ class PowerGridEnv(gym.Env):
         self.generator_outputs[5:13] = 100.0  # Gas plants at minimum
         self.generator_outputs[13:] = -50.0  # DR at 25% load reduction
         
-        # Initialize loads (MW) - random within specified range
+        # Initialize loads (MW) - distribute total system load across buses
+        # Total system load should be 2000-5000 MW as per proposal
         load_min, load_max = self.load_range
-        self.loads = torch.rand(self.n_buses, device=self.device) * (load_max - load_min) + load_min
+        total_system_load = torch.rand(1, device=self.device).item() * (load_max - load_min) + load_min
+        load_distribution = torch.rand(self.n_buses, device=self.device)
+        self.loads = (load_distribution / load_distribution.sum()) * total_system_load
         
         # Initialize renewable generation (14 buses with renewables)
         self.renewable_buses = torch.randint(0, self.n_buses, (14,), device=self.device)
@@ -268,10 +278,21 @@ class PowerGridEnv(gym.Env):
     
     def _update_stochastic_components(self):
         """Update stochastic load and renewable generation."""
-        # Add random variations to loads (±5% per step)
+        # Add random variations to loads while maintaining total system load in [2000, 5000] MW
+        # Add ±5% variation to individual bus loads
         load_variation = torch.randn(self.n_buses, device=self.device) * 0.05
         self.loads *= (1.0 + load_variation)
-        self.loads = torch.clamp(self.loads, self.load_range[0], self.load_range[1])
+        
+        # Rescale to maintain total system load within bounds
+        current_total = torch.sum(self.loads)
+        load_min, load_max = self.load_range
+        if current_total < load_min:
+            self.loads *= (load_min / current_total)
+        elif current_total > load_max:
+            self.loads *= (load_max / current_total)
+        
+        # Ensure no negative loads
+        self.loads = torch.clamp(self.loads, min=0.0)
         
         # Update renewable generation with stochastic variations
         renewable_variation = torch.randn(14, device=self.device) * 0.1
@@ -313,8 +334,8 @@ class PowerGridEnv(gym.Env):
         # Subtract loads
         power_injection -= self.loads
         
-        # Simplified swing equation: df/dt = (P_mech - P_elec) / (2 * H * f_nom)
-        # where P_elec is calculated from power flow
+        # Swing equation from proposal: df/dt = (P_gen - P_load - P_losses) / (2 * H * S_base)
+        # where S_base is the base power (MVA), not nominal frequency
         
         # Calculate electrical power flow (simplified)
         frequency_deviations = self.frequencies - self.nominal_frequency
@@ -323,39 +344,48 @@ class PowerGridEnv(gym.Env):
         # Power imbalance
         power_imbalance = power_injection - electrical_power
         
-        # Update frequencies using swing equation
-        frequency_derivative = power_imbalance / (2.0 * self.inertia_constants * self.nominal_frequency)
+        # Update frequencies using correct swing equation (use base_power, not nominal_frequency)
+        frequency_derivative = power_imbalance / (2.0 * self.inertia_constants * self.base_power)
         self.frequencies += frequency_derivative * self.dt * 60.0  # Convert minutes to seconds
         
-        # Enforce frequency bounds
-        self.frequencies = torch.clamp(self.frequencies, self.frequency_bounds[0], self.frequency_bounds[1])
+        # NO CLAMPING - let physics run its course for realistic dynamics
     
     def _calculate_reward(self):
-        """Calculate the shared reward based on equation 2 with exact coefficients."""
-        # 1. Frequency deviation penalty: -1000 * sum of squared deviations
+        """
+        Calculate the shared reward with graduated response.
+        Uses exponential penalties to create soft boundaries before hard violations.
+        """
         frequency_deviations = self.frequencies - self.nominal_frequency
+        
+        # 1. Base frequency penalty from proposal: -1000 * sum of squared deviations
         frequency_penalty = 1000.0 * torch.sum(frequency_deviations ** 2)
         
-        # 2. Agent-specific costs: C_i per MW adjusted (based on last actions)
+        # 2. Exponential penalty as frequencies approach operational bounds [59.5, 60.5]
+        # Creates a "soft boundary" that strongly discourages approaching limits
+        operational_margin = 0.5  # Hz (operational bounds from proposal)
+        beyond_operational = torch.abs(frequency_deviations) - operational_margin
+        beyond_operational = torch.clamp(beyond_operational, min=0.0)  # Only penalize if beyond
+        exponential_penalty = 5000.0 * torch.sum(torch.exp(5.0 * beyond_operational) - 1.0)
+        
+        # 3. Agent-specific costs: C_i per MW adjusted (from proposal equation 2)
         if hasattr(self, 'last_actions'):
             agent_costs = torch.sum(self.cost_coefficients * torch.abs(self.last_actions))
         else:
             agent_costs = 0.0
         
-        # 3. Wear-and-tear functions: 0.1 * W_i (based on action magnitude)
+        # 4. Wear-and-tear functions: 0.1 * W_i(|ΔP^i|) (from proposal equation 2)
+        # Note: Using quadratic wear W_i * (ΔP^i)^2 for smoother gradients
         if hasattr(self, 'last_actions'):
             wear_costs = 0.1 * torch.sum(self.wear_coefficients * (self.last_actions ** 2))
         else:
             wear_costs = 0.0
         
-        # 4. Safety constraint violations: exactly 10,000 per violation
-        safety_violations = 0.0
-        freq_violations = torch.sum((self.frequencies < self.frequency_bounds[0]) | 
-                                  (self.frequencies > self.frequency_bounds[1]))
+        # 5. Hard safety constraint violations: 10,000 per bus violating operational bounds
+        freq_violations = torch.sum((torch.abs(frequency_deviations) > operational_margin))
         safety_violations = freq_violations * 10000.0
         
         # Total reward (negative because we minimize costs)
-        reward = -(frequency_penalty + agent_costs + wear_costs + safety_violations)
+        reward = -(frequency_penalty + exponential_penalty + agent_costs + wear_costs + safety_violations)
         
         return reward.item()
     
@@ -426,12 +456,22 @@ class PowerGridEnv(gym.Env):
         return observations
     
     def _check_termination(self):
-        """Check if episode should be terminated or truncated."""
-        # Terminate if frequency violations are too severe
-        severe_violations = torch.sum((self.frequencies < 59.0) | (self.frequencies > 61.0))
-        terminated = severe_violations > 0
+        """
+        Check if episode should be terminated or truncated.
+        Uses graduated termination criteria - only catastrophic failures terminate.
+        """
+        # Critical violations: ±1.0 Hz from nominal (proposal bounds)
+        critical_violations = torch.sum((self.frequencies < 59.0) | (self.frequencies > 61.0))
         
-        # Truncate after maximum time steps (e.g., 1000 steps = ~16.7 hours)
+        # Catastrophic violations: ±1.5 Hz from nominal (blackout conditions)
+        catastrophic_violations = torch.sum((self.frequencies < 58.5) | (self.frequencies > 61.5))
+        
+        # Terminate only on:
+        # 1. Catastrophic frequency deviations (±1.5 Hz)
+        # 2. OR >10% of buses in critical state (±1.0 Hz)
+        terminated = (catastrophic_violations > 0) or (critical_violations > 0.1 * self.n_buses)
+        
+        # Truncate after maximum time steps (1000 steps with dt=2s ≈ 33 minutes)
         truncated = self.time_step >= 1000
         
         return terminated, truncated
