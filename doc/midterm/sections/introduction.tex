@@ -1,0 +1,10 @@
+\section{Introduction}
+\label{sec:introduction}
+
+\textbf{Motivation.} Modern power grids with $>30\%$ renewable penetration face frequency stability challenges due to reduced inertia, causing doubled rate-of-change-of-frequency events and \$10B+ annual regulation costs~\cite{nerc2023}. Traditional PI controllers and model predictive control cannot optimize multi-step costs or handle stochastic disturbances effectively~\cite{kundur1994,venkat2008}. Multi-agent reinforcement learning offers coordinated, adaptive control with potential 20--40\% cost reduction~\cite{venkat2022}.
+
+\textbf{Problem Formulation.} We formulate frequency regulation as a cooperative Multi-Agent MDP with $N=20$ agents across a 68-bus network: (i) \textit{Decision-makers}: 5 batteries (50 MW/min), 8 gas plants (10 MW/min), 7 demand response units (5 MW/min); (ii) \textit{Dynamics}: Swing equation $\frac{df}{dt} = \frac{P_{\text{gen}} - P_{\text{load}}}{2H \cdot S_{\text{base}}}$ with coupled agent actions; (iii) \textit{Sequential nature}: Multi-step lookahead required due to renewable forecasts, load fluctuations, communication delays (2s), and safety constraints ($\pm 0.5$ Hz).
+
+\textbf{Challenges.} Continuous state/action spaces ($\mathcal{S} \subseteq \mathbb{R}^{140}$, $\mathcal{A}^i \in \mathbb{R}$), partial observability ($O^i \in \mathbb{R}^{15}$), stochastic disturbances, hard safety constraints, and multi-agent coordination (non-stationarity, credit assignment, scalability).
+
+\textbf{Contributions.} (1) Complete 68-bus simulator with realistic dynamics; (2) MAPPO implementation with CTDE; (3) Training results over 1000 episodes; (4) Failure mode analysis and concrete improvement roadmap.

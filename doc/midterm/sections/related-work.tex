@@ -1,0 +1,23 @@
+\section{Related Work \& Problem Formulation}
+\label{sec:related-work}
+
+\textbf{Prior Work.} Classical AGC uses PI controllers~\cite{kundur1994} but cannot optimize multi-step costs. MPC requires accurate models~\cite{venkat2008}. Single-agent RL applied to dispatch~\cite{zhang2020,cao2020} but doesn't scale. MARL approaches include MADDPG~\cite{lowe2017} and communication-based methods~\cite{jiang2018}. We choose MAPPO for its stability, state-of-the-art cooperative performance, and CTDE architecture.
+
+\textbf{MA-MDP Definition.} $\mathcal{M} = (\mathcal{S}, \{\mathcal{A}^i\}, P, R, \gamma, N)$ with: 
+
+\textit{State} $s \in \mathbb{R}^{140}$ (68 bus frequencies, 20 generator outputs, 14 renewables, 30 loads, 8 time features)
+
+\textit{Observations} $o^i \in \mathbb{R}^{15}$ (local freq, own output, system deviation, 5 nearby freqs, 3-step forecast, time, load)
+
+\textit{Actions} $a^i \in [-1,1]$ scaled by ramp rates with capacity constraints
+
+\textit{Dynamics} via swing equations with stochastic loads/renewables and N-1 contingencies ($p=0.001$)
+
+\textit{Shared reward}:
+\begin{equation}
+R = -1000\sum_k (f_k - 60)^2 - \sum_i C_i|\Delta P^i| - 0.1\sum_i W_i(\Delta P^i)^2 - 10^4 \cdot \ind_{\text{violations}}
+\end{equation}
+
+balancing frequency stability, operational cost, wear-and-tear, and safety. 
+
+\textbf{Objective:} Maximize $J = \mathbb{E}[\sum_t \gamma^t R_t]$ with $\gamma=0.99$ subject to $\Pr[|f_k - 60| > 0.5] < 0.01$.

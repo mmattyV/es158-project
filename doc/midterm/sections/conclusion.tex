@@ -1,0 +1,36 @@
+\section{Path Forward}
+\label{sec:conclusion}
+
+\textbf{Immediate Actions (Weeks 7--8).}
+
+(1) \textit{Reward shaping}: Add anticipatory term $-100\sum_i (f_i^{\text{forecast}} - 60)^2$, piecewise linear action costs, DR utilization bonus $+50\ind[|\Delta P^i| > 0.1 R^i_{\max}]$, derivative penalty $-10\sum_k |df_k/dt|$. Expected 30--40\% improvement. 
+
+(2) \textit{Enhanced observations}: Add $P_{\text{gen}}^{\text{total}} - P_{\text{load}}^{\text{total}}$, $df/dt$, forecast error, 3-step history $\rightarrow$ 51-dim obs. Expected 50\% reduction in miscoordination. 
+
+(3) \textit{PI-AGC baseline}: Implement $\Delta P^i = K_p^i \Delta f + K_i^i \int \Delta f$, tune gains, establish quantitative benchmark.
+
+\textbf{Algorithmic Enhancements (Weeks 9--10).}
+
+(1) \textit{Curriculum}: Train progressively—normal (eps 0--300) $\rightarrow$ occasional contingencies (300--600) $\rightarrow$ full difficulty (600--1000). 
+
+(2) \textit{Safe exploration}: Action masking, safety layer projecting onto $|f + \Delta f| < 0.4$ Hz set, conservative initialization. 
+
+(3) \textit{Value improvements}: Target networks ($\tau\!=\!0.005$), reward normalization, larger critic.
+
+\textbf{Evaluation (Week 11).} 
+
+Compare MAPPO vs. PI-AGC, independent PPO, random on: frequency deviation, violation rate, cost, N-1 response time, utilization. 
+
+Test scenarios: extreme ramps (50\% drop in 10s), double contingencies, high load ($>4500$ MW), low inertia (50\% renewables). Ablation studies isolating each improvement.
+
+\textbf{Risks \& Mitigation.} If improvements insufficient: pivot to MADDPG, simplify to 30-bus, focus on specific scenarios. If instability: incremental integration, extensive logging, reduce learning rates. Time constraints: prioritize reward shaping + PI-AGC (high impact, low risk).
+
+\textbf{Success Criteria.} 
+
+\textit{Minimum}: Match PI-AGC, beat independent learners by $\geq15\%$, comprehensive evaluation. 
+
+\textit{Target}: $\geq25\%$ better than PI-AGC, 99\% within 0.2 Hz, zero critical violations. 
+
+\textit{Stretch}: Near-optimal vs. MPC, communication extensions.
+
+\textbf{Contributions.} Systematic MARL evaluation for frequency regulation, open-source 68-bus environment and MAPPO agent, detailed failure analysis, deployment roadmap. Even if target metrics unmet, insights advance understanding of MARL for safety-critical power systems.

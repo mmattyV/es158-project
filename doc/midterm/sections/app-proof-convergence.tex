@@ -1,0 +1,36 @@
+\section*{Appendix: Hyperparameters}
+
+\begin{minipage}[t]{0.48\textwidth}
+\textbf{Environment}
+\begin{itemize}[nosep,leftmargin=*]
+    \item Buses: 68, Agents: 20
+    \item Time step: 2s (1/30 min)
+    \item Frequency: [59.5, 60.5] Hz safe
+    \item Load: [2000, 5000] MW
+    \item Contingency: $p=0.001$
+\end{itemize}
+\textbf{Agent Types}
+\begin{itemize}[nosep,leftmargin=*]
+    \item Battery (5): 50 MW/min, [0,100] MW
+    \item Gas (8): 10 MW/min, [50,500] MW
+    \item DR (7): 5 MW/min, [-200,0] MW
+\end{itemize}
+\end{minipage}
+\hfill
+\begin{minipage}[t]{0.48\textwidth}
+\textbf{MAPPO}
+\begin{itemize}[nosep,leftmargin=*]
+    \item Actor: [128,128], lr $3\times10^{-4}$
+    \item Critic: [256,256], lr $1\times10^{-3}$
+    \item $\gamma=0.99$, GAE $\lambda=0.95$
+    \item PPO clip $\epsilon=0.2$, entropy 0.01
+    \item Buffer 2048, batch 256, epochs 10
+\end{itemize}
+\textbf{Reward Weights}
+\begin{itemize}[nosep,leftmargin=*]
+    \item Frequency: 1000 per Hz$^2$
+    \item Cost: Battery 5, Gas 50, DR 20 \$/MW
+    \item Wear: Battery 0.1, Gas 0.05, DR 0.2
+    \item Violation: $10^4$
+\end{itemize}
+\end{minipage}

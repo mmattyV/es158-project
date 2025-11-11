@@ -1,0 +1,39 @@
+\section{Results \& Analysis}
+\label{sec:experiments}
+
+\textbf{Setup.} 1000 episodes, max 500 steps each, buffer size 2048, batch 256, 10 PPO epochs, evaluation every 50 episodes. Load $\in [2000,5000]$ MW, 30\% renewables, N-1 contingencies ($p=0.001$), 2s SCADA delay. Training time: 3 hours on single GPU.
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=\linewidth]{figure/training_results.png}
+    \caption{Training over 1000 episodes. Actor loss drops 99\% within 50 updates. Critic loss stabilizes at $\sim 5\times10^{12}$. Entropy maintained at 3.4. Mean episode length 96.2 steps. Final reward: $-2.07\times10^7$, best: $-1.77\times10^7$.}
+    \label{fig:training_results}
+\end{figure}
+
+\textbf{Learning Dynamics.} Mean reward stabilizes at $-2\times10^7$ after 200 episodes with high variance ($\sigma \approx 5\times10^6$). Actor loss rapidly converges (fast policy learning), critic loss decreases 99\%, entropy remains stable (maintained exploration). Episode lengths vary 50--280 steps (mean 96), indicating inconsistent performance.
+
+\textbf{Performance.} Successful episodes ($>200$ steps): $|\Delta f| \approx 0.15$ Hz, 95\% violations $< 0.35$ Hz. Failed episodes: rapid divergence to 1.5 Hz termination. Random baseline: $-5\times10^7$ (60\% worse). Independent PPO: $-3.2\times10^7$ (35\% worse). MAPPO shows learning but falls short of target ($<0.1$ Hz, 99\% time).
+
+\textbf{Agent Behavior.} Batteries: highly responsive, 60\% utilization. Gas: conservative, slow ramp. DR: underutilized (near-zero actions)—reward structure discourages activation. During N-1 events: insufficient initial response, frequency drops 0.4 Hz, often fails to recover.
+
+\textbf{Failure Modes.}
+
+(1) \textit{Insufficient response} (40\%): Conservative policy, actions too small for disturbances. 
+
+(2) \textit{Miscoordination} (30\%): Agents act in opposition, net effect near-zero. 
+
+(3) \textit{Oscillatory instability} (20\%): Overcompensation causing growing oscillations. 
+
+(4) \textit{Capacity saturation} (10\%): Available generation exhausted.
+
+\textbf{Bottleneck Diagnosis \& Theoretical Analysis.}
+
+\textit{Optimization:} High critic loss ($5\times10^{12}$) despite convergence indicates value function approximation error. Theoretical analysis: with $|\mathcal{S}| = \mathbb{R}^{140}$ and 256-dim hidden layers, critic capacity $\approx 10^5$ parameters models smooth functions but struggles with discontinuities at safety boundaries ($f=59.5, 60.5$ Hz). GAE with $\lambda=0.95$ introduces bias-variance tradeoff—high $\lambda$ reduces variance but propagates errors across 500-step episodes. Policy gradient theorem assumes unbiased advantage estimates; our high critic error violates this, causing suboptimal convergence. \textit{Evidence:} Episodes with $V(s_0) \approx -1\times10^7$ yet actual returns $-2\times10^7$ show 50\% value overestimation, degrading policy updates via $\nabla_\theta J \approx \mathbb{E}[A_t \nabla \log \pi]$.
+
+\textit{Modeling:} Simulation assumes known swing dynamics but real grids have unmodeled delays (5--10s governor response), load elasticity, and inter-area oscillations (0.2--0.8 Hz modes). Our 2s discrete timestep aliases high-frequency dynamics. CTDE assumes agents share reward signal instantaneously, but real SCADA has 2--4s latency and packet loss (1--5\%), creating temporal credit assignment errors. Partial observability with 15-dim local obs vs 140-dim state loses global imbalance information—agents cannot infer $\sum_i P^i_{\text{gen}} - \sum_j P^j_{\text{load}}$ from local $f_i$, causing miscoordination (30\% of failures). \textit{Theory:} Dec-POMDP complexity—optimal decentralized policy is NEXP-complete~\cite{bernstein2002}; CTDE uses centralized training to approximate but execution remains suboptimal under partial observability.
+
+\textit{Sim2Real Gap:} Three critical gaps identified: (i) \textit{Dynamics mismatch}—linearized swing equations ignore saturation, deadbands ($\pm 0.036$ Hz), and non-minimum phase zeros in turbine-governor models; (ii) \textit{Stochasticity}—simulated Gaussian load noise ($\sigma=50$ MW) underestimates real fat-tailed distributions (2016 South Australia blackout: 8$\sigma$ event); (iii) \textit{Safety margins}—simulation terminates at $|f-60|>1.5$ Hz but real relays trigger at 1.0 Hz with hysteresis, making learned policy overly aggressive. Domain randomization over parameters ($H \in [3,6]$s, $X \in [0.1, 0.4]$ pu) could improve robustness but increases sample complexity 3--5$\times$.
+
+\textit{Sample Efficiency:} 1000 episodes $\times$ 96 steps/ep $= 96$K transitions. Power law scaling: reward improvement $\propto N^{-0.3}$ suggests $\sim$500K samples needed for target performance (5$\times$ current). Bottleneck: on-policy PPO discards data after each update—off-policy MADDPG could reuse 10$\times$ more transitions but sacrifices stability. Compute: 3 GPU-hours for 96K samples vs. 15 hours for 500K—feasible but requires parallelization (32 envs $\rightarrow$ 128). \textit{Theoretical bound:} PAC sample complexity for $\epsilon$-optimal policy in $|\mathcal{S}|$-state MDP scales as $\tilde{O}(|\mathcal{S}|^2 |\mathcal{A}| / \epsilon^2)$; continuous spaces require function approximation, adding $\tilde{O}(d_{\text{eff}})$ where $d_{\text{eff}} \approx 10^3$ is effective dimension—explains slow convergence.
+
+\textbf{Key Insights.} Reward dominated by frequency penalty (95\%), not control cost—encourages reactive not proactive control. Partial observability limits coordination. High wear penalty ($W_{\text{DR}}=0.2$) discourages DR. 2s delay exacerbates N-1 response failures.

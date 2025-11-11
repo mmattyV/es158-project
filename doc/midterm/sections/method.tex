@@ -1,0 +1,28 @@
+\section{Method: MAPPO}
+\label{sec:method}
+
+\textbf{Algorithmic Pivot.} Our proposal planned MADDPG as the primary method. However, after literature review and preliminary experiments, we pivoted to MAPPO for three key reasons: (i) \textit{Stability}—PPO's clipped objective provides more stable training than DDPG's deterministic policy gradients, critical for safety-critical power systems; (ii) \textit{Empirical performance}—MAPPO achieves state-of-the-art results on cooperative benchmarks (StarCraft Multi-Agent Challenge, Multi-Agent Particle Environments)~\cite{yu2021}; (iii) \textit{Sample efficiency}—shared parameters and on-policy learning with GAE suit cooperative tasks with shared rewards better than off-policy actor-critic. Additionally, PPO's hyperparameter robustness (learning rate, clipping $\epsilon$) reduces tuning burden compared to DDPG's sensitivity to replay buffer size and target network updates. This pivot aligns with recent trends showing on-policy methods outperform off-policy in fully cooperative settings.
+
+\textbf{Architecture.} MAPPO uses CTDE: 
+
+(i) \textit{Actor} $\pi(a|o;\theta)$: [15$\rightarrow$128$\rightarrow$128$\rightarrow$1] with LayerNorm, ReLU, outputs Gaussian $\mathcal{N}(\mu_\theta(o), \sigma_\theta^2(o))$, shared across agents ($\sim$18K params)
+
+(ii) \textit{Critic} $V(s;\phi)$: [140$\rightarrow$256$\rightarrow$256$\rightarrow$1] with LayerNorm, ReLU ($\sim$103K params)
+
+During training, critic accesses full state; during execution, actors use local observations only.
+
+\textbf{Training.} Collect rollouts until buffer size $B=2048$. Compute advantages via GAE-$\lambda$ ($\lambda=0.95$):
+\begin{equation}
+A_t = \sum_{l=0}^{T-t} (\gamma\lambda)^l \delta_{t+l} \quad \text{where} \quad \delta_t = R_t + \gamma V(s_{t+1}) - V(s_t)
+\end{equation}
+
+Update policy via PPO clipped objective over 10 epochs with batch size 256:
+\begin{equation}
+L^{\text{CLIP}} = \mathbb{E}\left[\min(r_t A_t, \text{clip}(r_t, 1-\epsilon, 1+\epsilon) A_t)\right] + \beta_{\text{ent}} H(\pi)
+\end{equation}
+
+where $r_t = \exp(\sum_i \log\pi(a_t^i|o_t^i;\theta) - \log\pi(a_t^i|o_t^i;\theta_{\text{old}}))$, $\epsilon=0.2$, $\beta_{\text{ent}}=0.01$. 
+
+Update critic via $L^{\text{CRITIC}} = \mathbb{E}[(V(s_t) - G_t)^2]$ with $c_v=0.5$. Use Adam ($\text{lr}_{\text{actor}}=3\times10^{-4}$, $\text{lr}_{\text{critic}}=1\times10^{-3}$), gradient clipping ($\|\nabla\| \leq 0.5$).
+
+\textbf{Implementation.} $\sim$900 lines across \texttt{networks.py}, \texttt{buffer.py}, \texttt{mappo.py}, \texttt{train.py} plus 580-line environment. Validated through gradient flow, value convergence, entropy monitoring, and action distribution checks.
