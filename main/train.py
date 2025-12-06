@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 import os
 from datetime import datetime
 import json
+from torch.utils.tensorboard import SummaryWriter
 
 
 class Trainer:
@@ -65,6 +66,10 @@ class Trainer:
         # Create save directory
         os.makedirs(save_dir, exist_ok=True)
         
+        # Create TensorBoard writer
+        log_dir = os.path.join('runs', f'mappo_{datetime.now().strftime("%Y%m%d_%H%M%S")}')
+        self.writer = SummaryWriter(log_dir=log_dir)
+        
         # Training statistics
         self.episode_rewards = []
         self.episode_lengths = []
@@ -77,6 +82,7 @@ class Trainer:
         print(f"  Batch size: {batch_size}")
         print(f"  Update epochs: {n_epochs}")
         print(f"  Save directory: {save_dir}")
+        print(f"  TensorBoard logs: {log_dir}")
     
     def collect_rollout(self, max_steps=500):
         """
@@ -88,10 +94,12 @@ class Trainer:
         Returns:
             episode_reward: Total episode reward
             episode_length: Episode length
+            final_info: Final info dict with episode statistics
         """
         obs, info = self.env.reset()
         episode_reward = 0
         episode_length = 0
+        final_info = info
         
         for step in range(max_steps):
             # Get full state for critic
@@ -109,11 +117,12 @@ class Trainer:
             episode_reward += reward
             episode_length += 1
             obs = next_obs
+            final_info = next_info  # Keep updating to get final stats
             
             if terminated or truncated:
                 break
         
-        return episode_reward, episode_length
+        return episode_reward, episode_length, final_info
     
     def train(self, n_episodes=1000, max_steps_per_episode=500):
         """
@@ -130,12 +139,59 @@ class Trainer:
         best_eval_reward = -float('inf')
         
         for episode in range(1, n_episodes + 1):
+            # Set episode for curriculum learning
+            self.env.set_episode(episode)
+            
             # Collect rollout
-            episode_reward, episode_length = self.collect_rollout(max_steps_per_episode)
+            episode_reward, episode_length, final_info = self.collect_rollout(max_steps_per_episode)
             total_steps += episode_length
             
             self.episode_rewards.append(episode_reward)
             self.episode_lengths.append(episode_length)
+            
+            # Log basic metrics to TensorBoard
+            self.writer.add_scalar('Train/EpisodeReward', episode_reward, episode)
+            self.writer.add_scalar('Train/EpisodeLength', episode_length, episode)
+            
+            # Log comprehensive environment diagnostics
+            if final_info:
+                # Frequency metrics
+                self.writer.add_scalar('Env/MeanFrequency', final_info.get('mean_frequency', 0), episode)
+                self.writer.add_scalar('Env/FrequencyStd', final_info.get('frequency_std', 0), episode)
+                self.writer.add_scalar('Env/FrequencyMin', final_info.get('frequency_min', 0), episode)
+                self.writer.add_scalar('Env/FrequencyMax', final_info.get('frequency_max', 0), episode)
+                self.writer.add_scalar('Env/FrequencyRange', final_info.get('frequency_range', 0), episode)
+                
+                # Power balance
+                self.writer.add_scalar('Env/TotalGeneration', final_info.get('total_generation', 0), episode)
+                self.writer.add_scalar('Env/TotalLoad', final_info.get('total_load', 0), episode)
+                self.writer.add_scalar('Env/PowerImbalance', final_info.get('power_imbalance', 0), episode)
+                self.writer.add_scalar('Env/PowerImbalancePct', final_info.get('power_imbalance_pct', 0), episode)
+                
+                # Violations
+                self.writer.add_scalar('Env/SafetyViolations', final_info.get('safety_violations', 0), episode)
+                self.writer.add_scalar('Env/CriticalViolations', final_info.get('critical_violations', 0), episode)
+                self.writer.add_scalar('Env/CatastrophicViolations', final_info.get('catastrophic_violations', 0), episode)
+                
+                # Agent actions
+                self.writer.add_scalar('Env/ActionMean', final_info.get('action_mean', 0), episode)
+                self.writer.add_scalar('Env/ActionStd', final_info.get('action_std', 0), episode)
+                self.writer.add_scalar('Env/ActionMax', final_info.get('action_max', 0), episode)
+                self.writer.add_scalar('Env/MeanCapacityUtilization', final_info.get('mean_capacity_utilization', 0), episode)
+                
+                # Reward components (CRITICAL for debugging!)
+                self.writer.add_scalar('Reward/FrequencyPenalty', final_info.get('reward_frequency_penalty', 0), episode)
+                self.writer.add_scalar('Reward/ExponentialPenalty', final_info.get('reward_exponential_penalty', 0), episode)
+                self.writer.add_scalar('Reward/AgentCosts', final_info.get('reward_agent_costs', 0), episode)
+                self.writer.add_scalar('Reward/WearCosts', final_info.get('reward_wear_costs', 0), episode)
+                self.writer.add_scalar('Reward/SafetyViolations', final_info.get('reward_safety_violations', 0), episode)
+                self.writer.add_scalar('Reward/ViolationCount', final_info.get('reward_freq_violation_count', 0), episode)
+                self.writer.add_scalar('Reward/SurvivalBonus', final_info.get('reward_survival_bonus', 0), episode)
+            
+            # Log curriculum bounds (for tracking training stages)
+            if hasattr(self.env, 'current_crit_bound'):
+                self.writer.add_scalar('Curriculum/CriticalBound', self.env.current_crit_bound, episode)
+                self.writer.add_scalar('Curriculum/CatastrophicBound', self.env.current_cat_bound, episode)
             
             # Update policy when buffer is full (standard MAPPO: collect full rollout before updating)
             if self.buffer.full:
@@ -145,6 +201,11 @@ class Trainer:
                 if stats:
                     self.actor_losses.append(stats['actor_loss'])
                     self.critic_losses.append(stats['critic_loss'])
+                    
+                    # Log losses to TensorBoard
+                    self.writer.add_scalar('Train/ActorLoss', stats['actor_loss'], episode)
+                    self.writer.add_scalar('Train/CriticLoss', stats['critic_loss'], episode)
+                    self.writer.add_scalar('Train/Entropy', stats['entropy'], episode)
             
             # Logging
             if episode % self.log_interval == 0:
@@ -157,6 +218,11 @@ class Trainer:
                 print(f"  Total steps: {total_steps}")
                 print(f"  Avg reward (last {self.log_interval}): {avg_reward:.2f}")
                 print(f"  Avg length (last {self.log_interval}): {avg_length:.1f}")
+                
+                # Show curriculum stage info
+                if hasattr(self.env, 'current_crit_bound'):
+                    print(f"  Curriculum bounds: ±{self.env.current_crit_bound:.1f} / ±{self.env.current_cat_bound:.1f} Hz")
+                
                 if self.actor_losses:
                     print(f"  Actor loss: {self.actor_losses[-1]:.4f}")
                     print(f"  Critic loss: {self.critic_losses[-1]:.4f}")
@@ -167,6 +233,9 @@ class Trainer:
                 eval_reward = self.evaluate(n_eval_episodes=5)
                 self.eval_rewards.append((episode, eval_reward))
                 print(f"Evaluation at episode {episode}: {eval_reward:.2f}")
+                
+                # Log evaluation to TensorBoard
+                self.writer.add_scalar('Eval/AverageReward', eval_reward, episode)
                 
                 # Save best model
                 if eval_reward > best_eval_reward:
@@ -192,6 +261,10 @@ class Trainer:
         self.agent.save(os.path.join(self.save_dir, 'final_model.pt'))
         self.save_training_stats()
         self.plot_training_curves()
+        
+        # Close TensorBoard writer
+        self.writer.close()
+        print(f"TensorBoard logs saved. View with: tensorboard --logdir=runs")
     
     def evaluate(self, n_eval_episodes=10, max_steps=500):
         """
@@ -321,13 +394,13 @@ def main():
         obs_dim=env.obs_dim,
         state_dim=env.state_dim,
         action_dim=1,
-        lr_actor=3e-4,
-        lr_critic=1e-3,
+        lr_actor=4e-4,  # Balanced LR for stable yet adaptive learning
+        lr_critic=3e-4,  # Reduced from 1e-3 for more stable critic learning
         gamma=0.99,
-        gae_lambda=0.95,
+        gae_lambda=0.99,  # Increased from 0.95 - trust actual rewards more than bootstrapped values
         clip_epsilon=0.2,
         entropy_coef=0.01,
-        value_coef=0.5,
+        value_coef=2.0,  # Increased from 1.0 - FORCE critic to learn before actor updates
         max_grad_norm=0.5,
         device=device
     )
@@ -346,8 +419,12 @@ def main():
         device=device
     )
     
-    # Start training
-    trainer.train(n_episodes=1000, max_steps_per_episode=500)
+    # Start training with EXTENDED curriculum (4000 episodes)
+    # Stage 1 (Ep 1-1500): Very lenient (±2.5/3.5 Hz) - EXTENDED for solid foundation
+    # Stage 2 (Ep 1501-2500): Moderate-high (±2.2/3.2 Hz) - Gentle transition
+    # Stage 3 (Ep 2501-3500): Moderate (±2.0/3.0 Hz) - Practicing coordination
+    # Stage 4 (Ep 3501+): Final (±1.8/2.5 Hz) - Operational bounds (±1.2 proved too hard)
+    trainer.train(n_episodes=4000, max_steps_per_episode=500)
 
 
 if __name__ == "__main__":

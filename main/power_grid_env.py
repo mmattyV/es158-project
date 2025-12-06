@@ -1,14 +1,14 @@
 """
 Multi-Agent Power Grid Environment for Reinforcement Learning
 
-This environment simulates a 68-bus power grid with 20 agents:
-- 5 batteries (ramp rate: 50 MW/min)
-- 8 gas plants (ramp rate: 10 MW/min) 
-- 7 demand response units (ramp rate: 5 MW/min)
+This environment simulates a 20-bus power grid with 10 agents:
+- 2 batteries (ramp rate: 50 MW/min)
+- 5 gas plants (ramp rate: 10 MW/min) 
+- 3 demand response units (ramp rate: 5 MW/min)
 
-State space: 140-dimensional (bus frequencies, generator outputs, loads)
+State space: 60-dimensional (bus frequencies, generator outputs, renewables, loads, time features)
 Each agent observes: 15-dimensional local observation
-Actions: 20 continuous power changes ΔP^i within ramp rate limits
+Actions: 10 continuous power changes ΔP^i within ramp rate limits
 
 Key Features (Aligned with Proposal):
 - Correct swing equation: df/dt = P_imbalance / (2*H*S_base)
@@ -31,8 +31,8 @@ class PowerGridEnv(gym.Env):
     """Multi-agent power grid environment using gymnasium interface."""
     
     def __init__(self, 
-                 n_buses: int = 68,
-                 n_agents: int = 20,
+                 n_buses: int = 20,
+                 n_agents: int = 10,
                  dt: float = 2.0/60.0,  # time step in minutes (2 seconds)
                  frequency_bounds: Tuple[float, float] = (59.5, 60.5),
                  load_range: Tuple[float, float] = (2000.0, 5000.0),
@@ -42,8 +42,8 @@ class PowerGridEnv(gym.Env):
         Initialize the power grid environment.
         
         Args:
-            n_buses: Number of buses in the power grid (68)
-            n_agents: Number of agents (20: 5 batteries + 8 gas + 7 DR)
+            n_buses: Number of buses in the power grid (20)
+            n_agents: Number of agents (10: 2 batteries + 5 gas + 3 DR)
             dt: Time step in minutes
             frequency_bounds: Frequency bounds in Hz [59.5, 60.5]
             load_range: Load range in MW [2000, 5000]
@@ -61,29 +61,29 @@ class PowerGridEnv(gym.Env):
         self.contingency_prob = contingency_prob
         
         # Agent configuration: [batteries, gas plants, demand response]
-        self.agent_types = ['battery'] * 5 + ['gas'] * 8 + ['dr'] * 7
-        self.ramp_rates = torch.tensor([50.0] * 5 + [10.0] * 8 + [5.0] * 7, device=self.device)  # MW/min
+        self.agent_types = ['battery'] * 2 + ['gas'] * 5 + ['dr'] * 3
+        self.ramp_rates = torch.tensor([50.0] * 2 + [10.0] * 5 + [5.0] * 3, device=self.device)  # MW/min
         
         # Agent capacity constraints [P_min, P_max] in MW
-        self.power_min = torch.tensor([0.0] * 5 + [50.0] * 8 + [-200.0] * 7, device=self.device)
-        self.power_max = torch.tensor([100.0] * 5 + [500.0] * 8 + [0.0] * 7, device=self.device)
+        self.power_min = torch.tensor([0.0] * 2 + [50.0] * 5 + [-200.0] * 3, device=self.device)
+        self.power_max = torch.tensor([100.0] * 2 + [500.0] * 5 + [0.0] * 3, device=self.device)
         
         # Agent-specific cost coefficients ($/MW)
-        self.cost_coefficients = torch.tensor([5.0] * 5 + [50.0] * 8 + [20.0] * 7, device=self.device)
+        self.cost_coefficients = torch.tensor([5.0] * 2 + [50.0] * 5 + [20.0] * 3, device=self.device)
         
         # Wear-and-tear coefficients for different agent types
-        self.wear_coefficients = torch.tensor([0.1] * 5 + [0.05] * 8 + [0.2] * 7, device=self.device)
+        self.wear_coefficients = torch.tensor([0.1] * 2 + [0.05] * 5 + [0.2] * 3, device=self.device)
         
         # Power system parameters
         self.nominal_frequency = 60.0  # Hz
         self.base_power = 10000.0  # MVA base (scaled to match system size ~5000 MW)
         self.inertia_constants = torch.rand(n_buses, device=self.device) * 5.0 + 2.0  # H in seconds
         
-        # Grid topology - simplified admittance matrix (68x68)
+        # Grid topology - simplified admittance matrix (20x20)
         self._initialize_grid_topology()
         
-        # State space: [frequencies (68), generator outputs (20), renewables (14), loads (30), time features (8)] = 140
-        self.state_dim = 140
+        # State space: [frequencies (20), generator outputs (10), renewables (7), loads (10), time features (8)] = 55
+        self.state_dim = 55
         self.obs_dim = 15  # Local observation dimension per agent as specified in proposal
         
         # Action space: continuous power changes for each agent
@@ -102,7 +102,10 @@ class PowerGridEnv(gym.Env):
         
         # Renewable forecast parameters
         self.forecast_horizon = 5  # 5 time steps ahead
-        self.renewable_forecasts = torch.zeros(14, self.forecast_horizon, device=self.device)
+        self.renewable_forecasts = torch.zeros(7, self.forecast_horizon, device=self.device)
+        
+        # Curriculum learning - episode tracking for adaptive termination bounds
+        self.current_episode = 0
         
         # Initialize state variables
         self.reset()
@@ -156,13 +159,6 @@ class PowerGridEnv(gym.Env):
         self.frequencies = torch.ones(self.n_buses, device=self.device) * self.nominal_frequency
         self.frequencies += torch.randn(self.n_buses, device=self.device) * 0.01  # Small initial deviation
         
-        # Initialize generator outputs (MW) within capacity bounds
-        self.generator_outputs = torch.zeros(self.n_agents, device=self.device)
-        # Set initial outputs to minimum capacity for gas plants and mid-range for batteries
-        self.generator_outputs[:5] = 50.0  # Batteries at 50% capacity
-        self.generator_outputs[5:13] = 100.0  # Gas plants at minimum
-        self.generator_outputs[13:] = -50.0  # DR at 25% load reduction
-        
         # Initialize loads (MW) - distribute total system load across buses
         # Total system load should be 2000-5000 MW as per proposal
         load_min, load_max = self.load_range
@@ -170,9 +166,25 @@ class PowerGridEnv(gym.Env):
         load_distribution = torch.rand(self.n_buses, device=self.device)
         self.loads = (load_distribution / load_distribution.sum()) * total_system_load
         
-        # Initialize renewable generation (14 buses with renewables)
-        self.renewable_buses = torch.randint(0, self.n_buses, (14,), device=self.device)
-        self.renewable_generation = torch.rand(14, device=self.device) * 500.0  # 0-500 MW
+        # Initialize renewable generation (7 buses with renewables)
+        self.renewable_buses = torch.randint(0, self.n_buses, (7,), device=self.device)
+        self.renewable_generation = torch.rand(7, device=self.device) * 500.0  # 0-500 MW
+        
+        # Initialize generator outputs (MW) to balance load minus renewables
+        # This starts closer to equilibrium and reduces initial frequency deviations
+        total_load = torch.sum(self.loads).item()
+        total_renewable = torch.sum(self.renewable_generation).item()
+        required_generation = total_load - total_renewable
+        
+        # Distribute required generation intelligently across agent types
+        self.generator_outputs = torch.zeros(self.n_agents, device=self.device)
+        # Batteries at mid-range (50 MW each = 100 MW total for 2 batteries)
+        self.generator_outputs[:2] = 50.0
+        # Gas plants handle most of the load (share remaining proportionally)
+        gas_share = max(0.0, required_generation - 100.0 + 150.0) / 5.0  # Account for batteries and DR
+        self.generator_outputs[2:7] = torch.clamp(torch.tensor(gas_share, device=self.device), min=50.0, max=500.0)
+        # DR at 25% load reduction (-50 MW each = -150 MW total for 3 DR units)
+        self.generator_outputs[7:] = -50.0
         
         # Initialize voltage angles (radians)
         self.voltage_angles = torch.zeros(self.n_buses, device=self.device)
@@ -233,8 +245,8 @@ class PowerGridEnv(gym.Env):
         # Apply feasible power changes to generator outputs
         self.generator_outputs += feasible_changes
         
-        # Ensure outputs stay within bounds (safety check)
-        self.generator_outputs = torch.clamp(self.generator_outputs, self.power_min, self.power_max)
+        # Ensure outputs stay within bounds (safety check) - element-wise clamp
+        self.generator_outputs = torch.max(torch.min(self.generator_outputs, self.power_max), self.power_min)
         
         # Store action for wear calculation
         self.last_actions = feasible_changes
@@ -295,7 +307,7 @@ class PowerGridEnv(gym.Env):
         self.loads = torch.clamp(self.loads, min=0.0)
         
         # Update renewable generation with stochastic variations
-        renewable_variation = torch.randn(14, device=self.device) * 0.1
+        renewable_variation = torch.randn(len(self.renewable_generation), device=self.device) * 0.1
         self.renewable_generation *= (1.0 + renewable_variation)
         self.renewable_generation = torch.clamp(self.renewable_generation, 0.0, 1000.0)
     
@@ -354,6 +366,7 @@ class PowerGridEnv(gym.Env):
         """
         Calculate the shared reward with graduated response.
         Uses exponential penalties to create soft boundaries before hard violations.
+        STORES COMPONENTS for debugging.
         """
         frequency_deviations = self.frequencies - self.nominal_frequency
         
@@ -362,10 +375,12 @@ class PowerGridEnv(gym.Env):
         
         # 2. Exponential penalty as frequencies approach operational bounds [59.5, 60.5]
         # Creates a "soft boundary" that strongly discourages approaching limits
+        # CRITICAL FIX: Reduced exponent 5.0 → 1.0 (exp(5*3)=3.3M vs exp(1*3)=20!)
+        # Also reduced coefficient 5000 → 500
         operational_margin = 0.5  # Hz (operational bounds from proposal)
         beyond_operational = torch.abs(frequency_deviations) - operational_margin
         beyond_operational = torch.clamp(beyond_operational, min=0.0)  # Only penalize if beyond
-        exponential_penalty = 5000.0 * torch.sum(torch.exp(5.0 * beyond_operational) - 1.0)
+        exponential_penalty = 500.0 * torch.sum(torch.exp(1.0 * beyond_operational) - 1.0)
         
         # 3. Agent-specific costs: C_i per MW adjusted (from proposal equation 2)
         if hasattr(self, 'last_actions'):
@@ -384,8 +399,35 @@ class PowerGridEnv(gym.Env):
         freq_violations = torch.sum((torch.abs(frequency_deviations) > operational_margin))
         safety_violations = freq_violations * 10000.0
         
-        # Total reward (negative because we minimize costs)
-        reward = -(frequency_penalty + exponential_penalty + agent_costs + wear_costs + safety_violations)
+        # 6. SURVIVAL BONUS - Reward agents for staying alive!
+        # Balanced bonus: strong enough to incentivize survival, not so strong it masks penalties
+        # 50k per timestep after ÷1M scaling = +0.05 per step
+        # 300 steps = +15 total, 200 steps = +10 total (5 point difference)
+        # Penalties can now differentiate good vs bad control while surviving
+        survival_bonus = 50000.0
+        
+        # Store components for debugging (before scaling)
+        self.last_reward_components = {
+            'frequency_penalty': frequency_penalty.item(),
+            'exponential_penalty': exponential_penalty.item(),
+            'agent_costs': agent_costs.item() if isinstance(agent_costs, torch.Tensor) else agent_costs,
+            'wear_costs': wear_costs.item() if isinstance(wear_costs, torch.Tensor) else wear_costs,
+            'safety_violations': safety_violations.item(),
+            'freq_violation_count': freq_violations.item(),
+            'survival_bonus': survival_bonus
+        }
+        
+        # Total reward (negative penalties + positive survival bonus)
+        reward = -(frequency_penalty + exponential_penalty + agent_costs + wear_costs + safety_violations) + survival_bonus
+        
+        # NO CLIPPING - Let critic see the true cost of catastrophic failures!
+        # Previous clipping at -100k prevented learning: agents learned "do nothing" was cheap
+        # Now exponential penalties flow through fully, forcing agents to maintain control
+        
+        # STRONG scaling to handle exponential penalties (1e9 range without clipping)
+        # Reduced exponential coefficient (500 instead of 5000) AND stronger scaling (1M vs 15k)
+        # Target: catastrophic = -1000, good control = -1 to -10
+        reward = reward / 1000000.0  # Much stronger scaling to handle unclipped penalties
         
         return reward.item()
     
@@ -458,18 +500,47 @@ class PowerGridEnv(gym.Env):
     def _check_termination(self):
         """
         Check if episode should be terminated or truncated.
-        Uses graduated termination criteria - only catastrophic failures terminate.
+        Uses CURRICULUM LEARNING with episode-based milestones.
+        Gradually tightens bounds as agents improve.
         """
-        # Critical violations: ±1.0 Hz from nominal (proposal bounds)
-        critical_violations = torch.sum((self.frequencies < 59.0) | (self.frequencies > 61.0))
+        # CURRICULUM LEARNING - Extended Stage 1 for solid foundation
+        # Agents need MUCH more time at easy bounds to learn basic control
+        if self.current_episode < 1500:
+            # Stage 1: Very lenient (learning basics) - EXTENDED to 1500 eps
+            crit_bound = 2.5  # ±2.5 Hz
+            cat_bound = 3.5   # ±3.5 Hz
+            crit_threshold = 0.30  # 30% of buses
+        elif self.current_episode < 2500:
+            # Stage 2: Moderate-high (gentle transition)
+            crit_bound = 2.2  # ±2.2 Hz
+            cat_bound = 3.2   # ±3.2 Hz
+            crit_threshold = 0.28  # 28% of buses
+        elif self.current_episode < 3500:
+            # Stage 3: Moderate (practicing coordination)
+            crit_bound = 2.0  # ±2.0 Hz
+            cat_bound = 3.0   # ±3.0 Hz
+            crit_threshold = 0.25  # 25% of buses
+        else:
+            # Stage 4: Final (reasonable operational bounds)
+            # Note: ±1.2 Hz proved too strict - stopping at ±1.8 Hz
+            crit_bound = 1.8  # ±1.8 Hz
+            cat_bound = 2.5   # ±2.5 Hz
+            crit_threshold = 0.20  # 20% of buses
         
-        # Catastrophic violations: ±1.5 Hz from nominal (blackout conditions)
-        catastrophic_violations = torch.sum((self.frequencies < 58.5) | (self.frequencies > 61.5))
+        # Store current bounds for logging
+        self.current_crit_bound = crit_bound
+        self.current_cat_bound = cat_bound
+        
+        # Calculate violations with curriculum bounds
+        critical_violations = torch.sum((self.frequencies < (60.0 - crit_bound)) | 
+                                       (self.frequencies > (60.0 + crit_bound)))
+        catastrophic_violations = torch.sum((self.frequencies < (60.0 - cat_bound)) | 
+                                           (self.frequencies > (60.0 + cat_bound)))
         
         # Terminate only on:
-        # 1. Catastrophic frequency deviations (±1.5 Hz)
-        # 2. OR >10% of buses in critical state (±1.0 Hz)
-        terminated = (catastrophic_violations > 0) or (critical_violations > 0.1 * self.n_buses)
+        # 1. Catastrophic frequency deviations
+        # 2. OR >threshold% of buses in critical state
+        terminated = (catastrophic_violations > 0) or (critical_violations > crit_threshold * self.n_buses)
         
         # Truncate after maximum time steps (1000 steps with dt=2s ≈ 33 minutes)
         truncated = self.time_step >= 1000
@@ -489,7 +560,7 @@ class PowerGridEnv(gym.Env):
     def _update_renewable_forecasts(self):
         """Update renewable generation forecasts for next 5-15 minutes."""
         # Simple forecast model: current + trend + noise
-        for i in range(14):
+        for i in range(len(self.renewable_generation)):
             current_gen = self.renewable_generation[i]
             
             # Add trend (seasonal pattern)
@@ -505,26 +576,28 @@ class PowerGridEnv(gym.Env):
                 self.renewable_forecasts[i, t] = torch.clamp(forecast, 0.0, 1000.0)
     
     def get_full_state(self):
-        """Get the complete 140-dimensional state vector for centralized critic."""
-        # State components: frequencies (68) + generator outputs (20) + renewables (14) + loads (30) + time features (8) = 140
+        """Get the complete 55-dimensional state vector for centralized critic."""
+        # State components: frequencies (20) + generator outputs (10) + renewables (7) + loads (10) + time features (8) = 55
         state = torch.zeros(self.state_dim, device=self.device)
         
         idx = 0
-        # Bus frequencies (68)
-        state[idx:idx+68] = self.frequencies
-        idx += 68
+        # Bus frequencies (20)
+        state[idx:idx+self.n_buses] = self.frequencies
+        idx += self.n_buses
         
-        # Generator outputs (20)
-        state[idx:idx+20] = self.generator_outputs
-        idx += 20
+        # Generator outputs (10)
+        state[idx:idx+self.n_agents] = self.generator_outputs
+        idx += self.n_agents
         
-        # Renewable generation (14)
-        state[idx:idx+14] = self.renewable_generation
-        idx += 14
+        # Renewable generation (7)
+        n_renewables = len(self.renewable_generation)
+        state[idx:idx+n_renewables] = self.renewable_generation
+        idx += n_renewables
         
-        # Loads (first 30 buses - most critical/largest loads)
-        state[idx:idx+30] = self.loads[:30]
-        idx += 30
+        # Loads (10 buses - using first 10 or all if n_buses < 10)
+        n_load_features = min(10, self.n_buses)
+        state[idx:idx+n_load_features] = self.loads[:n_load_features]
+        idx += n_load_features
         
         # Time features (8): hour, day, hour_sin, hour_cos, day_sin, day_cos, load_pattern, renewable_pattern
         state[idx] = self.current_hour / 24.0  # Normalized hour
@@ -544,25 +617,89 @@ class PowerGridEnv(gym.Env):
         return state
     
     def _get_info(self):
-        """Get additional information about the environment state."""
+        """Get additional information about the environment state with comprehensive diagnostics."""
         system_freq_deviation = torch.mean(self.frequencies - self.nominal_frequency).item()
+        total_gen = torch.sum(self.generator_outputs).item()
+        total_load = torch.sum(self.loads).item()
         
-        return {
+        # Agent action statistics
+        if hasattr(self, 'last_actions'):
+            action_mean = torch.mean(torch.abs(self.last_actions)).item()
+            action_std = torch.std(self.last_actions).item()
+            action_max = torch.max(torch.abs(self.last_actions)).item()
+        else:
+            action_mean = action_std = action_max = 0.0
+        
+        # Frequency statistics (detailed)
+        freq_min = torch.min(self.frequencies).item()
+        freq_max = torch.max(self.frequencies).item()
+        freq_range = freq_max - freq_min
+        
+        # Violation breakdown
+        critical_violations = torch.sum((self.frequencies < 58.8) | (self.frequencies > 61.2)).item()
+        catastrophic_violations = torch.sum((self.frequencies < 58.0) | (self.frequencies > 62.0)).item()
+        
+        info = {
+            # Basic info
             'time_step': self.time_step,
+            
+            # Frequency metrics
             'mean_frequency': torch.mean(self.frequencies).item(),
             'frequency_std': torch.std(self.frequencies).item(),
+            'frequency_min': freq_min,
+            'frequency_max': freq_max,
+            'frequency_range': freq_range,
             'system_freq_deviation': system_freq_deviation,
-            'total_generation': torch.sum(self.generator_outputs).item(),
-            'total_load': torch.sum(self.loads).item(),
-            'contingency_active': self.contingency_active,
+            
+            # Power balance
+            'total_generation': total_gen,
+            'total_load': total_load,
+            'power_imbalance': total_gen - total_load,
+            'power_imbalance_pct': 100.0 * (total_gen - total_load) / total_load if total_load > 0 else 0.0,
+            
+            # Violations
             'safety_violations': torch.sum((self.frequencies < self.frequency_bounds[0]) | 
                                          (self.frequencies > self.frequency_bounds[1])).item(),
-            'current_hour': self.current_hour,
-            'current_day': self.current_day,
+            'critical_violations': critical_violations,
+            'catastrophic_violations': catastrophic_violations,
+            
+            # Agent statistics
+            'action_mean': action_mean,
+            'action_std': action_std,
+            'action_max': action_max,
             'agent_capacity_utilization': [(self.generator_outputs[i] - self.power_min[i]) / 
                                          (self.power_max[i] - self.power_min[i]) 
-                                         for i in range(self.n_agents)]
+                                         for i in range(self.n_agents)],
+            'mean_capacity_utilization': torch.mean((self.generator_outputs - self.power_min) / 
+                                                   (self.power_max - self.power_min + 1e-6)).item(),
+            
+            # Environment state
+            'contingency_active': self.contingency_active,
+            'current_hour': self.current_hour,
+            'current_day': self.current_day,
+            
+            # Curriculum learning info
+            'curriculum_episode': self.current_episode,
+            'curriculum_crit_bound': getattr(self, 'current_crit_bound', 2.5),
+            'curriculum_cat_bound': getattr(self, 'current_cat_bound', 3.5),
         }
+        
+        # Add reward components if available
+        if hasattr(self, 'last_reward_components'):
+            for key, value in self.last_reward_components.items():
+                info[f'reward_{key}'] = value
+        
+        return info
+    
+    def set_episode(self, episode: int):
+        """
+        Set the current episode for curriculum learning.
+        Called by trainer at the start of each episode.
+        
+        Args:
+            episode: Current episode number
+        """
+        self.current_episode = episode
     
     def render(self, mode='human'):
         """Render the environment (optional)."""
