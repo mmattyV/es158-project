@@ -472,9 +472,9 @@ Total Load: {self.info['total_load']:.1f} MW
 Imbalance: {self.info['total_generation'] - self.info['total_load']:.1f} MW
 
 AGENT STATUS
-Batteries: {np.sum(self.env.generator_outputs[:5].cpu().numpy()):.1f} MW
-Gas Plants: {np.sum(self.env.generator_outputs[5:13].cpu().numpy()):.1f} MW
-Demand Response: {np.sum(self.env.generator_outputs[13:].cpu().numpy()):.1f} MW
+Batteries (2): {np.sum(self.env.generator_outputs[:2].cpu().numpy()):.1f} MW
+Gas Plants (5): {np.sum(self.env.generator_outputs[2:7].cpu().numpy()):.1f} MW
+Demand Response (3): {np.sum(self.env.generator_outputs[7:].cpu().numpy()):.1f} MW
 
 CONTINGENCY
 Active: {self.info['contingency_active']}

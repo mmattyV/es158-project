@@ -117,6 +117,8 @@ class RolloutBuffer:
         returns = advantages + self.values[:size]
         
         # Store computed values
+        # NOTE: No return normalization - it destroys the learning signal!
+        # We keep advantage normalization in get() method which is sufficient for PPO
         self.advantages[:size] = advantages
         self.returns[:size] = returns
     
