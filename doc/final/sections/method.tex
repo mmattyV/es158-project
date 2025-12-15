@@ -1,0 +1,87 @@
+\section{Method: MAPPO}
+\label{sec:method}
+
+\subsection{Algorithm Selection}
+
+We selected Multi-Agent Proximal Policy Optimization (MAPPO) over alternatives like MADDPG for three key reasons:
+\begin{enumerate}[nosep]
+    \item \textbf{Stability:} PPO's clipped objective provides more stable training than DDPG's deterministic policy gradients, critical for safety-critical power systems
+    \item \textbf{Empirical performance:} MAPPO achieves state-of-the-art results on cooperative benchmarks (StarCraft, Multi-Agent Particle Environments)~\cite{yu2021}
+    \item \textbf{Hyperparameter robustness:} PPO requires less tuning than off-policy methods
+\end{enumerate}
+
+\subsection{Architecture}
+
+MAPPO uses Centralized Training, Decentralized Execution (CTDE):
+
+\textbf{Actor Network} $\pi(a|o;\theta)$: Decentralized policy for each agent
+\begin{itemize}[nosep]
+    \item Architecture: [15 $\rightarrow$ 128 $\rightarrow$ 128 $\rightarrow$ 1] with LayerNorm and ReLU
+    \item Output: Gaussian distribution $\mathcal{N}(\mu_\theta(o), \sigma_\theta^2(o))$
+    \item Parameters: $\sim$19K (shared across agents)
+\end{itemize}
+
+\textbf{Critic Network} $V(s;\phi)$: Centralized value function
+\begin{itemize}[nosep]
+    \item Architecture: [55 $\rightarrow$ 256 $\rightarrow$ 256 $\rightarrow$ 1] with LayerNorm and ReLU
+    \item Input: Full global state (all bus frequencies, generator outputs, loads)
+    \item Parameters: $\sim$81K
+\end{itemize}
+
+During training, the critic accesses the full state for accurate value estimation. During execution, actors use only local 15-dimensional observations.
+
+\subsection{Training Algorithm}
+
+\textbf{Rollout Collection:} Episodes run for up to 500 steps or until termination. Transitions stored in buffer until size $B=2048$.
+
+\textbf{Advantage Estimation:} Generalized Advantage Estimation (GAE) with $\lambda=0.95$:
+\begin{equation}
+A_t = \sum_{l=0}^{T-t} (\gamma\lambda)^l \delta_{t+l} \quad \text{where} \quad \delta_t = R_t + \gamma V(s_{t+1}) - V(s_t)
+\end{equation}
+
+\textbf{Policy Update:} PPO clipped surrogate objective over 10 epochs with batch size 256:
+\begin{equation}
+L^{\text{CLIP}} = \mathbb{E}\left[\min\left(r_t(\theta) A_t, \text{clip}(r_t(\theta), 1-\epsilon, 1+\epsilon) A_t\right)\right] + \beta_{\text{ent}} H(\pi)
+\end{equation}
+where $r_t(\theta) = \frac{\pi_\theta(a_t|o_t)}{\pi_{\theta_{\text{old}}}(a_t|o_t)}$, $\epsilon=0.2$, and $\beta_{\text{ent}}=0.02$.
+
+\textbf{Critic Update:} Mean squared error on returns:
+\begin{equation}
+L^{\text{CRITIC}} = \mathbb{E}\left[(V_\phi(s_t) - G_t)^2\right]
+\end{equation}
+
+\subsection{Final Hyperparameters}
+
+\begin{center}
+\begin{tabular}{lcp{6cm}}
+\toprule
+\textbf{Parameter} & \textbf{Value} & \textbf{Rationale} \\
+\midrule
+Actor LR & $3 \times 10^{-4}$ & Standard PPO learning rate \\
+Critic LR & $1 \times 10^{-3}$ & Higher LR for faster value learning \\
+GAE $\lambda$ & 0.95 & Balanced bias-variance tradeoff \\
+Value Coefficient & 0.5 & Standard PPO value weight \\
+Entropy Coefficient & 0.02 & Encourage exploration \\
+Clip $\epsilon$ & 0.2 & Standard PPO clipping \\
+Discount $\gamma$ & 0.99 & Long-horizon planning \\
+Max Grad Norm & 0.5 & Gradient clipping for stability \\
+Buffer Size & 2048 & Transitions before update \\
+Batch Size & 256 & Minibatch for SGD \\
+PPO Epochs & 10 & Updates per buffer \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Implementation Details}
+
+The implementation comprises $\sim$1500 lines of Python across:
+\begin{itemize}[nosep]
+    \item \texttt{power\_grid\_env.py}: 775-line Gymnasium environment
+    \item \texttt{networks.py}: Actor and Critic neural networks
+    \item \texttt{mappo.py}: MAPPO agent with update logic
+    \item \texttt{buffer.py}: Rollout buffer with GAE computation
+    \item \texttt{train.py}: Training loop with TensorBoard logging
+\end{itemize}
+
+Training runs on CPU (MPS/CUDA optional) with checkpoints every 100 episodes and TensorBoard logging for all metrics.
+

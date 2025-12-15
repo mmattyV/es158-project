@@ -381,26 +381,26 @@ class Trainer:
 
 def main():
     """Main training function."""
-    # Set device
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    # Set device - using CPU for stability (MPS can hang on some operations)
+    device = 'cpu'
     print(f"Using device: {device}")
     
     # Create environment
     env = PowerGridEnv(device=device)
     
-    # Create MAPPO agent
+    # Create MAPPO agent with tuned hyperparameters
     agent = MAPPO(
         n_agents=env.n_agents,
         obs_dim=env.obs_dim,
         state_dim=env.state_dim,
         action_dim=1,
-        lr_actor=4e-4,  # Balanced LR for stable yet adaptive learning
-        lr_critic=3e-4,  # Reduced from 1e-3 for more stable critic learning
-        gamma=0.99,
-        gae_lambda=0.99,  # Increased from 0.95 - trust actual rewards more than bootstrapped values
-        clip_epsilon=0.2,
-        entropy_coef=0.01,
-        value_coef=2.0,  # Increased from 1.0 - FORCE critic to learn before actor updates
+        lr_actor=3e-4,    # Standard PPO actor LR
+        lr_critic=1e-3,   # Higher critic LR - critic should learn faster
+        gamma=0.99,       # Standard discount
+        gae_lambda=0.95,  # Standard GAE lambda (0.99 was too high, causing high variance)
+        clip_epsilon=0.2, # Standard PPO clip
+        entropy_coef=0.02,  # Slightly higher entropy for exploration
+        value_coef=0.5,   # Standard value coefficient
         max_grad_norm=0.5,
         device=device
     )

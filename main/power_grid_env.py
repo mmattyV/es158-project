@@ -35,20 +35,29 @@ class PowerGridEnv(gym.Env):
                  n_agents: int = 10,
                  dt: float = 2.0/60.0,  # time step in minutes (2 seconds)
                  frequency_bounds: Tuple[float, float] = (59.5, 60.5),
-                 load_range: Tuple[float, float] = (2000.0, 5000.0),
+                 load_range: Tuple[float, float] = (1500.0, 3000.0),  # FIXED: Reduced to match agent capacity!
                  contingency_prob: float = 0.001,
                  device: str = 'cpu'):
         """
         Initialize the power grid environment.
+        
+        CAPACITY FIX (10 agents):
+        - Batteries: 2 × 100 MW = 200 MW max
+        - Gas plants: 5 × 500 MW = 2500 MW max (250 MW min)
+        - DR: 3 × 200 MW = 600 MW load reduction
+        - Renewables: 7 × 300 MW = 0-2100 MW (now limited)
+        
+        Total controllable: 2700 MW + 600 MW reduction = 3300 MW
+        Load range MUST be within this capacity for agents to succeed!
         
         Args:
             n_buses: Number of buses in the power grid (20)
             n_agents: Number of agents (10: 2 batteries + 5 gas + 3 DR)
             dt: Time step in minutes
             frequency_bounds: Frequency bounds in Hz [59.5, 60.5]
-            load_range: Load range in MW [2000, 5000]
+            load_range: Load range in MW [1500, 3000] - matched to agent capacity!
             contingency_prob: Probability of N-1 contingency per step
-            device: PyTorch device ('cpu' or 'cuda')
+            device: PyTorch device ('cpu', 'cuda', or 'mps')
         """
         super().__init__()
         
@@ -167,24 +176,47 @@ class PowerGridEnv(gym.Env):
         self.loads = (load_distribution / load_distribution.sum()) * total_system_load
         
         # Initialize renewable generation (7 buses with renewables)
+        # CAPACITY FIX: Limit renewable range to prevent over-generation
+        # Max renewables should be ~1500 MW total to balance with 1500-3000 MW load
         self.renewable_buses = torch.randint(0, self.n_buses, (7,), device=self.device)
-        self.renewable_generation = torch.rand(7, device=self.device) * 500.0  # 0-500 MW
+        self.renewable_max_per_source = 300.0  # Max 300 MW per source (2100 MW total max)
+        self.renewable_generation = torch.rand(7, device=self.device) * 200.0 + 50.0  # 50-250 MW each
         
-        # Initialize generator outputs (MW) to balance load minus renewables
-        # This starts closer to equilibrium and reduces initial frequency deviations
+        # Initialize generator outputs (MW) to EXACTLY balance load minus renewables
+        # This ensures initial frequency stability
         total_load = torch.sum(self.loads).item()
         total_renewable = torch.sum(self.renewable_generation).item()
         required_generation = total_load - total_renewable
         
         # Distribute required generation intelligently across agent types
         self.generator_outputs = torch.zeros(self.n_agents, device=self.device)
+        
+        # DR at modest load reduction (-30 MW each = -90 MW total for 3 DR units)
+        dr_contribution = -90.0
+        self.generator_outputs[7:] = -30.0
+        
         # Batteries at mid-range (50 MW each = 100 MW total for 2 batteries)
+        battery_contribution = 100.0
         self.generator_outputs[:2] = 50.0
-        # Gas plants handle most of the load (share remaining proportionally)
-        gas_share = max(0.0, required_generation - 100.0 + 150.0) / 5.0  # Account for batteries and DR
-        self.generator_outputs[2:7] = torch.clamp(torch.tensor(gas_share, device=self.device), min=50.0, max=500.0)
-        # DR at 25% load reduction (-50 MW each = -150 MW total for 3 DR units)
-        self.generator_outputs[7:] = -50.0
+        
+        # Gas plants handle the remaining required generation
+        remaining_for_gas = required_generation - battery_contribution - dr_contribution
+        gas_share = remaining_for_gas / 5.0
+        
+        # Clamp gas to valid range and adjust if needed
+        gas_share_clamped = max(50.0, min(500.0, gas_share))
+        self.generator_outputs[2:7] = gas_share_clamped
+        
+        # Calculate actual power imbalance and fine-tune battery output to compensate
+        actual_generation = torch.sum(self.generator_outputs).item()
+        imbalance = required_generation - actual_generation
+        
+        # Distribute imbalance to batteries (they have fastest ramp rate)
+        if abs(imbalance) > 0:
+            battery_adjustment = imbalance / 2.0  # Split between 2 batteries
+            battery_adjustment = max(-50.0, min(50.0, battery_adjustment))  # Stay within [0, 100] MW
+            self.generator_outputs[0] = torch.clamp(self.generator_outputs[0] + battery_adjustment, 0.0, 100.0)
+            self.generator_outputs[1] = torch.clamp(self.generator_outputs[1] + battery_adjustment, 0.0, 100.0)
         
         # Initialize voltage angles (radians)
         self.voltage_angles = torch.zeros(self.n_buses, device=self.device)
@@ -306,10 +338,16 @@ class PowerGridEnv(gym.Env):
         # Ensure no negative loads
         self.loads = torch.clamp(self.loads, min=0.0)
         
-        # Update renewable generation with stochastic variations
-        renewable_variation = torch.randn(len(self.renewable_generation), device=self.device) * 0.1
+        # Update renewable generation with stochastic variations (reduced volatility)
+        # CAPACITY FIX: Smaller variations (5% instead of 10%) for more stable learning
+        renewable_variation = torch.randn(len(self.renewable_generation), device=self.device) * 0.05
         self.renewable_generation *= (1.0 + renewable_variation)
-        self.renewable_generation = torch.clamp(self.renewable_generation, 0.0, 1000.0)
+        # Clamp to reasonable range: min 20 MW (some always available), max per source limit
+        self.renewable_generation = torch.clamp(
+            self.renewable_generation, 
+            20.0,  # Minimum 20 MW per source ensures some renewable is always available
+            self.renewable_max_per_source  # Max 300 MW per source
+        )
     
     def _check_contingencies(self):
         """Check for N-1 contingency events."""
@@ -318,6 +356,8 @@ class PowerGridEnv(gym.Env):
                 # Activate contingency - disconnect a random bus
                 self.contingency_active = True
                 self.contingency_bus = torch.randint(0, self.n_buses, (1,)).item()
+                # Store original load before reducing
+                self._contingency_original_load = self.loads[self.contingency_bus].clone()
                 # Reduce load at contingency bus
                 self.loads[self.contingency_bus] *= 0.1
         else:
@@ -325,9 +365,13 @@ class PowerGridEnv(gym.Env):
             if self.contingency_active:
                 self.contingency_active = False
                 if self.contingency_bus is not None:
-                    # Restore load
-                    load_min, load_max = self.load_range
-                    self.loads[self.contingency_bus] = torch.rand(1, device=self.device) * (load_max - load_min) + load_min
+                    # Restore load to original value (not random!)
+                    if hasattr(self, '_contingency_original_load'):
+                        self.loads[self.contingency_bus] = self._contingency_original_load
+                    else:
+                        # Fallback: restore to average bus load
+                        avg_load = torch.mean(self.loads)
+                        self.loads[self.contingency_bus] = avg_load
                 self.contingency_bus = None
     
     def _update_system_dynamics(self):
@@ -365,69 +409,76 @@ class PowerGridEnv(gym.Env):
     def _calculate_reward(self):
         """
         Calculate the shared reward with graduated response.
-        Uses exponential penalties to create soft boundaries before hard violations.
-        STORES COMPONENTS for debugging.
+        
+        KEY FIX: Align penalties with CURRICULUM TERMINATION BOUNDS, not fixed ±0.5 Hz.
+        This ensures agents learn meaningful control relative to what causes termination.
         """
         frequency_deviations = self.frequencies - self.nominal_frequency
+        abs_deviations = torch.abs(frequency_deviations)
         
-        # 1. Base frequency penalty from proposal: -1000 * sum of squared deviations
-        frequency_penalty = 1000.0 * torch.sum(frequency_deviations ** 2)
+        # Get current curriculum bounds (set in _check_termination)
+        crit_bound = getattr(self, 'current_crit_bound', 2.5)
+        cat_bound = getattr(self, 'current_cat_bound', 3.5)
         
-        # 2. Exponential penalty as frequencies approach operational bounds [59.5, 60.5]
-        # Creates a "soft boundary" that strongly discourages approaching limits
-        # CRITICAL FIX: Reduced exponent 5.0 → 1.0 (exp(5*3)=3.3M vs exp(1*3)=20!)
-        # Also reduced coefficient 5000 → 500
-        operational_margin = 0.5  # Hz (operational bounds from proposal)
-        beyond_operational = torch.abs(frequency_deviations) - operational_margin
-        beyond_operational = torch.clamp(beyond_operational, min=0.0)  # Only penalize if beyond
-        exponential_penalty = 500.0 * torch.sum(torch.exp(1.0 * beyond_operational) - 1.0)
+        # 1. QUADRATIC PENALTY - Stronger emphasis on staying near 60 Hz
+        # Reward being close to 60 Hz, penalize deviations quadratically
+        frequency_penalty = 2000.0 * torch.sum(frequency_deviations ** 2)
         
-        # 3. Agent-specific costs: C_i per MW adjusted (from proposal equation 2)
+        # 2. PROGRESSIVE PENALTY as frequency approaches CURRICULUM termination bounds
+        # This creates a gradient that guides agents away from termination
+        # Warning zone starts at 50% of critical bound
+        warning_zone = crit_bound * 0.5  # Start warning at half of termination bound
+        
+        # Calculate how close to termination (0 = safe, 1 = at critical bound)
+        approach_ratio = (abs_deviations - warning_zone) / (crit_bound - warning_zone + 1e-6)
+        approach_ratio = torch.clamp(approach_ratio, min=0.0, max=1.5)  # Allow overshoot detection
+        
+        # Exponential penalty based on approach to termination
+        progressive_penalty = 1000.0 * torch.sum(torch.exp(2.0 * approach_ratio) - 1.0)
+        
+        # 3. Agent-specific costs: C_i per MW (from proposal)
         if hasattr(self, 'last_actions'):
             agent_costs = torch.sum(self.cost_coefficients * torch.abs(self.last_actions))
         else:
             agent_costs = 0.0
         
-        # 4. Wear-and-tear functions: 0.1 * W_i(|ΔP^i|) (from proposal equation 2)
-        # Note: Using quadratic wear W_i * (ΔP^i)^2 for smoother gradients
+        # 4. Wear-and-tear (reduced weight - not the main focus)
         if hasattr(self, 'last_actions'):
-            wear_costs = 0.1 * torch.sum(self.wear_coefficients * (self.last_actions ** 2))
+            wear_costs = 0.05 * torch.sum(self.wear_coefficients * (self.last_actions ** 2))
         else:
             wear_costs = 0.0
         
-        # 5. Hard safety constraint violations: 10,000 per bus violating operational bounds
-        freq_violations = torch.sum((torch.abs(frequency_deviations) > operational_margin))
-        safety_violations = freq_violations * 10000.0
+        # 5. STABILITY BONUS - Reward for keeping ALL buses within the warning zone
+        # This is INSTEAD of survival bonus - rewards quality control, not just survival
+        buses_in_warning = torch.sum(abs_deviations > warning_zone)
+        buses_stable = self.n_buses - buses_in_warning
+        stability_bonus = 5000.0 * buses_stable  # Reward per stable bus
         
-        # 6. SURVIVAL BONUS - Reward agents for staying alive!
-        # Balanced bonus: strong enough to incentivize survival, not so strong it masks penalties
-        # 50k per timestep after ÷1M scaling = +0.05 per step
-        # 300 steps = +15 total, 200 steps = +10 total (5 point difference)
-        # Penalties can now differentiate good vs bad control while surviving
-        survival_bonus = 50000.0
+        # 6. SMALL survival bonus (just to break ties, not dominate)
+        survival_bonus = 5000.0  # Reduced from 50k - survival shouldn't dominate control quality
         
-        # Store components for debugging (before scaling)
+        # 7. CRITICAL VIOLATION PENALTY - Strong signal as we approach termination
+        critical_violations = torch.sum(abs_deviations > crit_bound)
+        critical_penalty = 50000.0 * critical_violations
+        
+        # Store components for debugging
         self.last_reward_components = {
             'frequency_penalty': frequency_penalty.item(),
-            'exponential_penalty': exponential_penalty.item(),
+            'exponential_penalty': progressive_penalty.item(),
             'agent_costs': agent_costs.item() if isinstance(agent_costs, torch.Tensor) else agent_costs,
             'wear_costs': wear_costs.item() if isinstance(wear_costs, torch.Tensor) else wear_costs,
-            'safety_violations': safety_violations.item(),
-            'freq_violation_count': freq_violations.item(),
-            'survival_bonus': survival_bonus
+            'safety_violations': critical_penalty.item(),
+            'freq_violation_count': critical_violations.item(),
+            'survival_bonus': survival_bonus + stability_bonus.item(),
         }
         
-        # Total reward (negative penalties + positive survival bonus)
-        reward = -(frequency_penalty + exponential_penalty + agent_costs + wear_costs + safety_violations) + survival_bonus
+        # Total reward
+        total_penalty = frequency_penalty + progressive_penalty + agent_costs + wear_costs + critical_penalty
+        total_bonus = stability_bonus + survival_bonus
+        reward = -total_penalty + total_bonus
         
-        # NO CLIPPING - Let critic see the true cost of catastrophic failures!
-        # Previous clipping at -100k prevented learning: agents learned "do nothing" was cheap
-        # Now exponential penalties flow through fully, forcing agents to maintain control
-        
-        # STRONG scaling to handle exponential penalties (1e9 range without clipping)
-        # Reduced exponential coefficient (500 instead of 5000) AND stronger scaling (1M vs 15k)
-        # Target: catastrophic = -1000, good control = -1 to -10
-        reward = reward / 1000000.0  # Much stronger scaling to handle unclipped penalties
+        # Scale to reasonable range: target [-10, +5] for typical episodes
+        reward = reward / 100000.0
         
         return reward.item()
     
@@ -439,60 +490,66 @@ class PowerGridEnv(gym.Env):
             return self.observation_buffer[0]  # Return most recent if buffer not full
     
     def _get_observations_immediate(self):
-        """Get immediate (non-delayed) observations for each agent."""
+        """Get immediate (non-delayed) observations for each agent.
+        
+        KEY CHANGE: Use frequency DEVIATIONS instead of raw frequencies.
+        This makes the learning signal much clearer - agents see how far
+        from 60 Hz they are, scaled by curriculum bounds for context.
+        """
         observations = torch.zeros(self.n_agents, self.obs_dim, device=self.device)
         
-        # Calculate system frequency deviation (key coordination signal)
-        system_freq_deviation = torch.mean(self.frequencies - self.nominal_frequency)
+        # Pre-compute frequency deviations (key learning signal!)
+        freq_deviations = self.frequencies - self.nominal_frequency
+        system_freq_deviation = torch.mean(freq_deviations)
+        
+        # Get current curriculum bounds for scaling
+        crit_bound = getattr(self, 'current_crit_bound', 2.5)
         
         for i in range(self.n_agents):
             bus_idx = self.agent_bus_mapping[i]
             obs_idx = 0
             
-            # Local bus frequency (1)
-            observations[i, obs_idx] = self.frequencies[bus_idx]
+            # Local bus frequency DEVIATION (1) - scaled by critical bound
+            # At ±crit_bound, this will be ±1.0
+            observations[i, obs_idx] = freq_deviations[bus_idx] / crit_bound
             obs_idx += 1
             
-            # Local bus load (1)
-            observations[i, obs_idx] = self.loads[bus_idx]
+            # Local bus load (1) - normalized
+            observations[i, obs_idx] = self.loads[bus_idx] / 500.0
             obs_idx += 1
             
-            # Own generator output (1)
-            observations[i, obs_idx] = self.generator_outputs[i]
+            # Own generator output (1) - normalized by max capacity
+            observations[i, obs_idx] = self.generator_outputs[i] / (self.power_max[i] + 1e-6)
             obs_idx += 1
             
-            # System frequency deviation Δf_sys = (1/68)Σ(f_k - 60) (1)
-            observations[i, obs_idx] = system_freq_deviation
+            # System frequency deviation (1) - THE key coordination signal! Scaled.
+            observations[i, obs_idx] = system_freq_deviation / crit_bound
             obs_idx += 1
             
-            # Nearby bus frequencies (5 nearest buses)
+            # Nearby bus frequency DEVIATIONS (5) - also scaled
             distances = torch.abs(torch.arange(self.n_buses, device=self.device) - bus_idx)
-            _, nearest_indices = torch.topk(distances, k=6, largest=False)  # 6 to exclude self
+            _, nearest_indices = torch.topk(distances, k=6, largest=False)
             nearest_indices = nearest_indices[1:]  # Remove self
-            observations[i, obs_idx:obs_idx+5] = self.frequencies[nearest_indices]
+            observations[i, obs_idx:obs_idx+5] = freq_deviations[nearest_indices] / crit_bound
             obs_idx += 5
             
-            # Renewable generation forecasts - next 3 time steps (3)
-            # Use actual forecast values for next 3 time steps, averaged across all renewable sources
+            # Renewable generation forecasts (3) - normalized
             if self.renewable_forecasts.shape[1] >= 3:
-                # Average forecast across all renewable sources for next 3 time steps
-                observations[i, obs_idx:obs_idx+3] = torch.mean(self.renewable_forecasts[:, :3], dim=0)
+                observations[i, obs_idx:obs_idx+3] = torch.mean(self.renewable_forecasts[:, :3], dim=0) / 500.0
             else:
-                # Fallback if not enough forecast steps
-                observations[i, obs_idx:obs_idx+3] = torch.mean(self.renewable_generation)
+                observations[i, obs_idx:obs_idx+3] = torch.mean(self.renewable_generation) / 500.0
             obs_idx += 3
             
-            # Time features: hour of day, day of week (2)
-            observations[i, obs_idx] = self.current_hour / 24.0  # Normalized hour
-            observations[i, obs_idx+1] = self.current_day / 7.0  # Normalized day
+            # Time features (2) - already normalized [0, 1]
+            observations[i, obs_idx] = self.current_hour / 24.0
+            observations[i, obs_idx+1] = self.current_day / 7.0
             
-            # Total: 1+1+1+1+5+3+2 = 14, need 1 more for 15
-            # Add own capacity utilization (1)
+            # Capacity utilization (1) - [0, 1]
             capacity_range = self.power_max[i] - self.power_min[i]
             if capacity_range > 0:
                 utilization = (self.generator_outputs[i] - self.power_min[i]) / capacity_range
             else:
-                utilization = 0.0
+                utilization = torch.tensor(0.0, device=self.device)
             observations[i, 14] = utilization
         
         return observations

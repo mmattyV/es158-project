@@ -1,0 +1,42 @@
+\documentclass[10pt]{article}
+
+\usepackage{amsfonts, amsmath, amsthm}
+\usepackage[letterpaper, margin=1in]{geometry}
+\setlength{\parskip}{0.5em}
+\setlength{\parindent}{0pt}
+\usepackage[noend]{algorithmic}
+\usepackage[vlined,ruled,linesnumbered]{algorithm2e}
+
+%% preamble packages and symbols
+\input{preamble_packages}
+\input{preamble_symbols}
+
+\usepackage[pagebackref=true,breaklinks=true,colorlinks,bookmarks=false]{hyperref}
+
+%% shortcuts for common notations
+\input{shortcuts.tex}
+
+\title{Multi-Agent Reinforcement Learning for\\Real-Time Frequency Regulation in Power Grids:\\Final Report}
+
+\author{Derek Smith, Matthew Vu\\ES 158: Sequential Decision Making in Dynamic Environments\\Harvard University}
+
+\date{December 14, 2025}
+
+\begin{document}
+\maketitle
+\input{sections/abstract.tex}
+
+%% Main sections
+\input{sections/introduction.tex}
+\input{sections/environment.tex}
+\input{sections/method.tex}
+\input{sections/training.tex}
+\input{sections/experiments.tex}
+\input{sections/conclusion.tex}
+
+%% References
+\bibliographystyle{plain}
+\bibliography{refs}
+
+\end{document}
+
