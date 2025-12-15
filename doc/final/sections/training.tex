@@ -1,104 +1,44 @@
 \section{Training Challenges \& Solutions}
 \label{sec:training}
 
-This section documents the systematic debugging process that transformed an unstable training setup into one with convergent dynamics. Understanding these challenges is crucial for applying MARL to safety-critical systems.
+\subsection{Initial Problems and Fixes}
 
-\subsection{Initial Problems}
-
-Our early training runs exhibited severe instability:
-\begin{enumerate}[nosep]
-    \item \textbf{Critic loss exploding to $10^{13}$:} Value predictions wildly inaccurate
-    \item \textbf{Episode lengths declining:} Agents learned to ``fail fast'' ($\sim$50 steps)
-    \item \textbf{Actor loss stuck at 0:} No learning signal reaching policy
-    \item \textbf{Rewards in millions (negative):} Scale mismatch causing gradient issues
-\end{enumerate}
-
-\subsection{Debugging Process}
+Early training exhibited severe instability: critic loss exploding to $10^{13}$, episodes terminating at $\sim$50 steps, and rewards in millions (negative). We systematically debugged these issues:
 
 \begin{center}
-\begin{tabular}{p{3cm}p{4.5cm}p{5cm}}
+\begin{tabular}{p{3.5cm}p{5cm}}
 \toprule
-\textbf{Problem} & \textbf{Root Cause} & \textbf{Solution} \\
+\textbf{Problem} & \textbf{Solution} \\
 \midrule
-Exploding critic loss & Reward magnitude $\sim 10^6$ & Scaled rewards by $\div 100,000$ \\
-\addlinespace
-Immediate termination & Fixed $\pm 0.5$ Hz bounds too strict & Curriculum learning with relaxed initial bounds \\
-\addlinespace
-Agents doing nothing & No incentive to survive & Added survival + stability bonuses \\
-\addlinespace
-Capacity mismatch & Load range [2000, 5000] MW exceeded agent capacity & Reduced to [1500, 3000] MW \\
-\addlinespace
-Poor frequency signal & Raw 60 Hz values hard to learn & Normalized to frequency \textit{deviations} \\
-\addlinespace
-Reward-termination mismatch & Penalties used fixed bounds, termination used curriculum & Aligned both to curriculum bounds \\
+Exploding critic loss & Scaled rewards by $\div 100,000$ \\
+Immediate termination & Curriculum learning with relaxed bounds \\
+Agents doing nothing & Added survival + stability bonuses \\
+Capacity mismatch & Reduced load range to [1500, 3000] MW \\
+Poor frequency signal & Normalized to frequency \textit{deviations} \\
 \bottomrule
 \end{tabular}
 \end{center}
 
 \subsection{Key Fix: Capacity Mismatch}
 
-The most critical issue was a \textbf{capacity mismatch} between load and controllable generation:
+The most critical issue: with load range [2000, 5000] MW but only $\sim$3300 MW controllable generation, agents \textit{could not} balance the grid at high loads. Reducing to [1500, 3000] MW made learning feasible.
 
-\begin{center}
-\begin{tabular}{lcc}
-\toprule
- & \textbf{Before Fix} & \textbf{After Fix} \\
-\midrule
-Total Controllable Gen & $\sim$3300 MW & $\sim$3300 MW \\
-Load Range & [2000, 5000] MW & [1500, 3000] MW \\
-Renewable Range & [0, 7000] MW & [140, 2100] MW \\
-\midrule
-\textbf{Feasibility} & Often impossible & Always feasible \\
-\bottomrule
-\end{tabular}
-\end{center}
+\subsection{Reward Function}
 
-At high loads ($>4000$ MW) with low renewables, agents literally \textit{could not} balance the grid, leading to guaranteed termination regardless of policy quality. This made learning impossible.
-
-\subsection{Key Fix: Reward Function Redesign}
-
-The reward function was redesigned to:
-\begin{enumerate}[nosep]
-    \item \textbf{Align penalties with curriculum bounds:} Progressive penalty as frequency approaches \textit{current} termination threshold, not fixed $\pm 0.5$ Hz
-    \item \textbf{Add stability bonus:} Reward for keeping buses within safe zone (5000 per stable bus)
-    \item \textbf{Reduce survival bonus dominance:} From 50,000 to 5,000 to prevent masking control quality
-    \item \textbf{Scale appropriately:} Divide by 100,000 to target reward range $[-10, +5]$
-\end{enumerate}
-
-Final reward structure:
+We redesigned rewards to align with curriculum bounds:
 \begin{align}
-R_t &= -\underbrace{2000 \sum_k (f_k - 60)^2}_{\text{frequency penalty}} - \underbrace{1000 \sum_k (\exp(2 \cdot \text{approach}_k) - 1)}_{\text{progressive penalty}} \\
-&\quad - \underbrace{\sum_i C_i |a^i_t|}_{\text{agent costs}} - \underbrace{0.05 \sum_i W_i (a^i_t)^2}_{\text{wear costs}} - \underbrace{50000 \cdot n_{\text{critical}}}_{\text{violation penalty}} \\
-&\quad + \underbrace{5000 \cdot n_{\text{stable}}}_{\text{stability bonus}} + \underbrace{5000}_{\text{survival bonus}}
+R_t &= -2000 \textstyle\sum_k (f_k - 60)^2 - 1000 \textstyle\sum_k (\exp(2 \cdot \text{approach}_k) - 1) \notag \\
+&\quad - \textstyle\sum_i C_i |a^i_t| - 0.05 \textstyle\sum_i W_i (a^i_t)^2 + 5000 \cdot n_{\text{stable}} + 5000
 \end{align}
-
-where $\text{approach}_k = \frac{|f_k - 60| - 0.5 \cdot \text{crit\_bound}}{\text{crit\_bound} - 0.5 \cdot \text{crit\_bound}}$ measures proximity to termination.
-
-\subsection{Key Fix: Observation Normalization}
-
-Neural networks learn better from normalized inputs. We transformed observations:
-\begin{itemize}[nosep]
-    \item \textbf{Before:} Raw frequency values $\sim 60$ Hz (hard to learn small deviations)
-    \item \textbf{After:} Frequency \textit{deviations} scaled by curriculum bound (values in $[-1, 1]$)
-\end{itemize}
-
-This makes the learning signal much clearer---agents directly observe how far from the 60 Hz target they are.
+where $\text{approach}_k$ measures proximity to the \textit{current curriculum} termination bound, not fixed $\pm 0.5$ Hz.
 
 \subsection{Lessons Learned}
 
-\begin{enumerate}
-    \item \textbf{Reward scaling is critical:} RL algorithms are sensitive to reward magnitude; always normalize to reasonable ranges ($[-10, +10]$).
-    
-    \item \textbf{Ensure physical feasibility:} Before training, verify that the optimal policy \textit{can} achieve the goal. Capacity constraints must match task requirements.
-    
-    \item \textbf{Align reward with termination:} If curriculum learning changes difficulty, the reward function must track those changes.
-    
-    \item \textbf{Normalize observations:} Raw physical values (60 Hz) are hard for neural networks; use deviations and scaling.
-    
-    \item \textbf{Monitor entropy:} Collapsing entropy indicates premature convergence to suboptimal policies.
-    
-    \item \textbf{Start simple:} Reducing from 68 buses/20 agents to 20 buses/10 agents made debugging tractable.
+\begin{enumerate}[nosep]
+    \item \textbf{Ensure physical feasibility} before training---verify optimal policy can achieve the goal
+    \item \textbf{Reward scaling is critical}---normalize to $[-10, +10]$ range
+    \item \textbf{Align reward with termination}---if curriculum changes bounds, rewards must track
+    \item \textbf{Normalize observations}---use deviations, not raw values
 \end{enumerate}
 
-These fixes transformed training from divergent (critic loss $10^{13}$, episodes terminating at $\sim$50 steps) to convergent (critic loss $\sim$22, episodes reaching $\sim$400 steps). However, as we show in Section~\ref{sec:experiments}, fixing these issues reveals deeper challenges in multi-agent coordination that cannot be solved through hyperparameter tuning alone.
-
+These fixes transformed training from divergent to convergent. However, as Section~\ref{sec:experiments} shows, deeper multi-agent coordination challenges remain.

@@ -1,91 +1,28 @@
 \section{Environment Design}
 \label{sec:environment}
 
-\subsection{Grid Topology}
+\subsection{Grid Topology and Agents}
 
-We implement a simplified power grid environment with the following components:
-\begin{itemize}[nosep]
-    \item \textbf{20-bus power network} with realistic topology constraints and admittance matrix
-    \item \textbf{10 heterogeneous controllable agents:}
-    \begin{itemize}[nosep]
-        \item 2 Battery storage units: Fast response (50 MW/min), capacity [0, 100] MW each
-        \item 5 Gas plants: Slower ramp rates (10 MW/min), capacity [50, 500] MW each
-        \item 3 Demand response units: Load shedding capability (5 MW/min), range [-200, 0] MW each
-    \end{itemize}
-    \item \textbf{7 renewable generation sources} with stochastic output (50--300 MW each)
-    \item \textbf{Distributed loads} with total system load in [1500, 3000] MW range
-\end{itemize}
+We implement a 20-bus power network with 10 heterogeneous agents: 2 batteries (50 MW/min, [0,100] MW), 5 gas plants (10 MW/min, [50,500] MW), and 3 demand response units (5 MW/min, [-200,0] MW). Seven renewable sources provide 50--300 MW each with stochastic variation.
 
-\textbf{Capacity Analysis.} A critical design consideration is ensuring agents have sufficient capacity to balance the grid:
-\begin{center}
-\begin{tabular}{lcc}
-\toprule
-\textbf{Component} & \textbf{Min (MW)} & \textbf{Max (MW)} \\
-\midrule
-Batteries (2$\times$) & 0 & 200 \\
-Gas Plants (5$\times$) & 250 & 2500 \\
-Demand Response (3$\times$) & -600 & 0 \\
-Renewables (7$\times$) & 140 & 2100 \\
-\midrule
-Total Controllable & -- & $\sim$3300 \\
-\bottomrule
-\end{tabular}
-\end{center}
+\textbf{Capacity matching} is critical: total controllable generation ($\sim$3300 MW) must exceed load range. We set loads to [1500, 3000] MW to ensure agents can always balance the grid---without this, learning is impossible.
 
-The load range [1500, 3000] MW ensures agents can always balance the grid, avoiding scenarios where control is physically impossible.
+\subsection{Physics and Dynamics}
 
-\subsection{Physics Model}
-
-The environment uses the \textbf{swing equation} to model frequency dynamics at each bus $k$:
+Frequency dynamics follow the \textbf{swing equation}:
 \begin{equation}
 \frac{df_k}{dt} = \frac{P_{\text{mech},k} - P_{\text{elec},k}}{2H_k \cdot S_{\text{base}}}
-\label{eq:swing}
 \end{equation}
-where $H_k \in [2, 7]$ seconds is the inertia constant, $S_{\text{base}} = 10,000$ MVA is the base power, and the power imbalance determines frequency deviation from 60 Hz.
+with inertia $H_k \in [2, 7]$s, base power $S_{\text{base}} = 10,000$ MVA, time step $\Delta t = 2$s (SCADA delay), and N-1 contingencies ($p=0.001$/step).
 
-Key dynamics features:
-\begin{itemize}[nosep]
-    \item \textbf{Time step:} $\Delta t = 2$ seconds (SCADA delay)
-    \item \textbf{Communication delay:} 1 time step observation buffer
-    \item \textbf{N-1 contingencies:} Random bus disconnection with probability 0.001/step
-    \item \textbf{No frequency clamping:} Physics runs naturally for realistic dynamics
-\end{itemize}
+\subsection{State and Action Spaces}
 
-\subsection{Observation and Action Spaces}
+\textbf{Local observation (15-dim):} frequency deviation, load, own output, system frequency deviation, 5 neighbor frequencies, 3-step renewable forecast, time features, capacity utilization.
 
-\textbf{Local Observation per Agent (15 dimensions):}
-\begin{enumerate}[nosep]
-    \item Local bus frequency deviation (scaled by curriculum bound)
-    \item Local bus load (normalized)
-    \item Own generator output (normalized by capacity)
-    \item System-wide frequency deviation (coordination signal)
-    \item Nearby bus frequency deviations (5 neighbors)
-    \item Renewable generation forecasts (3 time steps ahead)
-    \item Time features (hour, day of week)
-    \item Own capacity utilization
-\end{enumerate}
+\textbf{Global state (55-dim):} All bus frequencies, generator outputs, renewables, loads, time features.
 
-\textbf{Global State for Critic (55 dimensions):}
-All bus frequencies, generator outputs, renewable generation, loads, and time features.
-
-\textbf{Actions:} Continuous power adjustments in $[-1, 1]$, scaled by agent-specific ramp rate limits.
+\textbf{Actions:} Continuous $[-1, 1]$ scaled by agent-specific ramp rates.
 
 \subsection{Curriculum Learning}
 
-To facilitate learning, we implement a 4-stage curriculum that gradually tightens frequency tolerances:
-
-\begin{center}
-\begin{tabular}{ccccc}
-\toprule
-\textbf{Stage} & \textbf{Episodes} & \textbf{Critical (Hz)} & \textbf{Catastrophic (Hz)} & \textbf{Threshold} \\
-\midrule
-1 & 0--1500 & $\pm 2.5$ & $\pm 3.5$ & 30\% \\
-2 & 1500--2500 & $\pm 2.2$ & $\pm 3.2$ & 28\% \\
-3 & 2500--3500 & $\pm 2.0$ & $\pm 3.0$ & 25\% \\
-4 & 3500+ & $\pm 1.8$ & $\pm 2.5$ & 20\% \\
-\bottomrule
-\end{tabular}
-\end{center}
-
-This allows agents to first learn basic survival and power balancing before facing stricter operational constraints.
-
+We progressively tighten frequency bounds: Stage 1 (ep 0--1500): $\pm 2.5$ Hz; Stage 2: $\pm 2.2$ Hz; Stage 3: $\pm 2.0$ Hz; Stage 4 (ep 3500+): $\pm 1.8$ Hz. This allows agents to learn basic control before facing strict constraints.

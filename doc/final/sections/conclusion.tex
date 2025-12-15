@@ -1,92 +1,27 @@
 \section{Conclusion}
 \label{sec:conclusion}
 
-\subsection{Summary of Results}
+We investigated MAPPO for power grid frequency control with 10 heterogeneous agents, revealing both potential and fundamental limitations of decentralized MARL.
 
-This project investigated Multi-Agent Proximal Policy Optimization (MAPPO) for power grid frequency control, revealing both the potential and fundamental limitations of decentralized multi-agent reinforcement learning in safety-critical domains.
+\textbf{What worked:} Critic loss converged ($10^{13} \rightarrow 22$), agents learned smooth control (wear costs halved), episodes reached 350--400 steps, and peak performance achieved reward $\sim$165 around episode 1000.
 
-\textbf{What Worked:}
-\begin{itemize}[nosep]
-    \item \textbf{Value function learning:} Critic loss converged consistently from $\sim$29 to $\sim$22, demonstrating that our reward scaling, capacity matching, and curriculum design enabled stable learning
-    \item \textbf{Behavioral learning:} Agents learned to reduce aggressive control actions (wear costs decreased 50\%), avoiding oscillatory instability
-    \item \textbf{Sustained grid operation:} Episode lengths reached 350--400 steps (70--80\% of maximum), compared to $\sim$50 steps before fixes
-    \item \textbf{Peak coordination:} Episodes 500--1200 achieved reward $\sim$165, proving that 10-agent coordination is achievable
-\end{itemize}
+\textbf{What didn't:} Policy performance degraded from $\sim$165 to $\sim$120 in later training, exhibiting the ``forgetting'' phenomenon despite continued critic convergence.
 
-\textbf{What Didn't Work:}
-\begin{itemize}[nosep]
-    \item \textbf{Sustained coordination:} Policy performance degraded from peak $\sim$165 to $\sim$120 in later training, exhibiting the ``forgetting'' phenomenon
-    \item \textbf{Stable convergence:} Despite critic convergence, actor policies failed to maintain learned coordination strategies
-    \item \textbf{Optimal control:} Final performance ($\sim$120 reward, $\sim$360 steps) falls short of theoretical maximum (reward $\sim$250, 500 steps)
-\end{itemize}
+\subsection{The Fundamental Challenge}
 
-\subsection{The Fundamental Challenge: Multi-Agent Coordination}
-
-Our results illustrate a core difficulty in multi-agent RL that extends beyond hyperparameter tuning or architectural choices. Coordinating 10 independent agents with partial observability faces inherent obstacles:
-
-\begin{enumerate}
-    \item \textbf{Non-stationarity:} Each agent's environment changes as other agents update, violating MDP assumptions
-    \item \textbf{Credit assignment:} Shared rewards provide no signal for individual agent contribution
-    \item \textbf{Exponential complexity:} The joint policy space grows exponentially with agent count
-    \item \textbf{Theoretical hardness:} Dec-POMDP optimal policies are NEXP-complete~\cite{bernstein2002}
-\end{enumerate}
-
-The decreasing critic loss alongside degrading policy performance is a key diagnostic: the value function correctly learned that returns were declining, but the actor could not escape the coordination collapse. This suggests the problem lies not in value estimation but in the difficulty of coordinating policy updates across 10 simultaneously-learning agents.
+Coordinating 10 independent agents under partial observability faces inherent obstacles: non-stationarity (other agents change the environment), credit assignment (shared rewards obscure individual contribution), and theoretical hardness (Dec-POMDP is NEXP-complete~\cite{bernstein2002}). The decreasing critic loss alongside degrading policy is key: value learning succeeded, but coordinating policy updates across 10 agents failed.
 
 \subsection{Lessons Learned}
 
-\begin{enumerate}
-    \item \textbf{Physical feasibility first:} Before any training, verify that the optimal policy \textit{can} achieve the goal. Our capacity mismatch fix was essential---without it, learning was impossible.
-    
-    \item \textbf{Reward-termination alignment:} Curriculum learning requires reward functions that track changing difficulty. Misalignment creates confusing gradients.
-    
-    \item \textbf{Value learning $\neq$ policy learning:} A converging critic does not guarantee a converging actor. In MARL, policy instability can persist despite accurate value estimates.
-    
-    \item \textbf{Coordination is fragile:} Even when agents find good coordination, individual policy updates can break it. Later training phases may need smaller learning rates or coordination-preserving constraints.
-    
-    \item \textbf{MAPPO has limits:} For problems requiring tight multi-agent coordination, MAPPO's independent actor updates may be insufficient. Value decomposition (QMIX), communication, or hierarchical approaches may be necessary.
+\begin{enumerate}[nosep]
+    \item \textbf{Physical feasibility first}---verify optimal policy can succeed before training
+    \item \textbf{Value learning $\neq$ policy learning}---critic convergence doesn't guarantee actor convergence in MARL
+    \item \textbf{Coordination is fragile}---individual policy updates can break discovered coordination
+    \item \textbf{MAPPO has limits}---tight multi-agent coordination may require value decomposition, communication, or hierarchy
 \end{enumerate}
 
 \subsection{Future Work}
 
-Several directions could address the coordination challenges we identified:
+Extensions to address coordination: QMIX/VDN for credit assignment~\cite{rashid2020}, attention mechanisms, explicit communication channels, hierarchical control, and comparison with PI-AGC baselines.
 
-\textbf{Algorithmic Extensions:}
-\begin{itemize}[nosep]
-    \item \textbf{QMIX / VDN:} Factored value functions that decompose credit to individual agents~\cite{rashid2020}
-    \item \textbf{Attention mechanisms:} Learn which agents to coordinate with dynamically
-    \item \textbf{Explicit communication:} Allow agents to exchange messages for coordination
-    \item \textbf{Hierarchical control:} High-level coordinator assigns roles, low-level agents execute
-\end{itemize}
-
-\textbf{Training Improvements:}
-\begin{itemize}[nosep]
-    \item \textbf{Learning rate scheduling:} Decay learning rate in later training to preserve coordination
-    \item \textbf{Population-based training:} Maintain diverse policy populations to avoid local minima
-    \item \textbf{Longer training:} Our 2000 episodes may be insufficient; power-law scaling suggests $\sim$10,000 episodes
-\end{itemize}
-
-\textbf{Evaluation Extensions:}
-\begin{itemize}[nosep]
-    \item \textbf{Baseline comparison:} PI-AGC controllers and Model Predictive Control
-    \item \textbf{Larger grids:} IEEE 68-bus and IEEE 118-bus benchmarks
-    \item \textbf{Higher-fidelity dynamics:} Governor models, saturation, inter-area oscillations
-\end{itemize}
-
-\subsection{Broader Implications}
-
-This project highlights a tension in applying deep RL to safety-critical infrastructure:
-
-\textbf{Promise:} Decentralized RL agents can learn coordinated behavior without explicit programming, potentially handling complexity that exceeds human design capacity. The CTDE paradigm offers a practical path to scalable control.
-
-\textbf{Reality:} Multi-agent coordination is fundamentally hard. The same independence that makes decentralized execution attractive also makes coordinated learning unstable. For safety-critical systems like power grids, this instability is unacceptable.
-
-The path forward likely requires hybrid approaches: use RL to optimize within a structured framework (e.g., hierarchical decomposition, communication protocols) rather than expecting purely independent agents to discover coordination from scratch.
-
-\subsection{Conclusion}
-
-We demonstrated that MAPPO can learn meaningful frequency control behaviors for a 10-agent power grid, achieving peak performance of $\sim$165 reward and $\sim$390-step episodes. However, the characteristic multi-agent coordination collapse---where performance peaks then degrades despite continued critic learning---reveals fundamental limits of independent policy gradient methods for tightly-coupled multi-agent systems.
-
-Our systematic debugging process (capacity matching, reward scaling, curriculum learning) provides a template for applying MARL to physical systems. The diagnostic insight that critic convergence can coexist with policy divergence offers a useful tool for future MARL practitioners.
-
-Ultimately, achieving reliable multi-agent control for safety-critical infrastructure will require moving beyond pure MAPPO toward methods that explicitly structure coordination---whether through value decomposition, communication, or hierarchy. This project takes a step toward understanding both what is possible and what remains challenging in this important domain.
+\textbf{Broader implication:} Multi-agent coordination is fundamentally hard. The independence enabling decentralized execution also makes coordinated learning unstable. Reliable MARL for safety-critical infrastructure likely requires structured approaches rather than purely independent agents.

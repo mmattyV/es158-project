@@ -2,7 +2,7 @@
 Neural network architectures for MAPPO agent.
 
 Actor: Decentralized policy network (15-dim local obs -> action distribution)
-Critic: Centralized value network (140-dim full state -> value estimate)
+Critic: Centralized value network (55-dim full state -> value estimate)
 """
 
 import torch
@@ -155,7 +155,7 @@ class Actor(nn.Module):
 class Critic(nn.Module):
     """Centralized critic network for value estimation."""
     
-    def __init__(self, state_dim=140, hidden_dims=[256, 256]):
+    def __init__(self, state_dim=55, hidden_dims=[256, 256]):
         """
         Initialize critic network.
         

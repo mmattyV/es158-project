@@ -1,50 +1,10 @@
 \section{Introduction}
 \label{sec:introduction}
 
-\subsection{Motivation}
+Modern power grids with $>30\%$ renewable penetration face frequency stability challenges due to reduced inertia and stochastic generation, causing \$10B+ annual regulation costs~\cite{nerc2023}. Traditional PI controllers and MPC struggle to scale with grid complexity~\cite{kundur1994,venkat2008}. Multi-agent reinforcement learning offers coordinated, adaptive control with potential 20--40\% cost reduction~\cite{venkat2022}.
 
-Modern power grids face increasing complexity due to renewable energy integration, which introduces stochastic generation patterns. With over 30\% renewable penetration in many regions, grids experience reduced inertia and doubled rate-of-change-of-frequency events, leading to \$10B+ annual regulation costs~\cite{nerc2023}. Traditional centralized control approaches---including PI controllers and model predictive control---struggle to scale with grid complexity and cannot effectively optimize multi-step costs under stochastic disturbances~\cite{kundur1994,venkat2008}.
+We explore \textbf{Centralized Training, Decentralized Execution (CTDE)} using MAPPO, where a centralized critic observes global state during training, but agents execute using only local observations. We formulate frequency regulation as a cooperative MA-MDP with $N=10$ heterogeneous agents (2 batteries, 5 gas plants, 3 demand response units) across a 20-bus network governed by swing equation dynamics.
 
-Multi-agent reinforcement learning (MARL) offers a promising alternative for coordinated, adaptive control with potential 20--40\% cost reduction~\cite{venkat2022}. This project explores \textbf{Centralized Training, Decentralized Execution (CTDE)} using Multi-Agent Proximal Policy Optimization (MAPPO), where:
-\begin{itemize}[nosep]
-    \item \textbf{Training:} A centralized critic observes global state to estimate value functions
-    \item \textbf{Execution:} Each agent acts independently using only local observations
-\end{itemize}
+\textbf{Challenges:} Continuous spaces ($\mathcal{S} \subseteq \mathbb{R}^{55}$, $\mathcal{O}^i \in \mathbb{R}^{15}$), partial observability, stochastic disturbances, hard safety constraints ($\pm 1.5$ Hz), and multi-agent coordination (non-stationarity, credit assignment).
 
-This paradigm enables scalable, real-time decision-making while leveraging global information during learning.
-
-\subsection{Problem Formulation}
-
-We formulate frequency regulation as a cooperative Multi-Agent Markov Decision Process (MA-MDP) with $N=10$ heterogeneous agents across a 20-bus network:
-
-\begin{enumerate}[nosep]
-    \item \textbf{Decision-makers:} 2 batteries (50 MW/min ramp rate), 5 gas plants (10 MW/min), 3 demand response units (5 MW/min)
-    \item \textbf{Dynamics:} Swing equation governing frequency evolution (Section~\ref{sec:environment})
-    \item \textbf{Sequential nature:} Multi-step lookahead required due to renewable forecasts, load fluctuations, communication delays (2s), and safety constraints ($\pm 0.5$ Hz operational bounds)
-\end{enumerate}
-
-\subsection{Challenges}
-
-This problem presents several fundamental challenges:
-\begin{itemize}[nosep]
-    \item \textbf{Continuous spaces:} State $\mathcal{S} \subseteq \mathbb{R}^{55}$, local observations $\mathcal{O}^i \in \mathbb{R}^{15}$, actions $\mathcal{A}^i \in \mathbb{R}$
-    \item \textbf{Partial observability:} Agents observe only local bus frequencies and limited neighbor information
-    \item \textbf{Stochastic disturbances:} Renewable generation and load variations
-    \item \textbf{Hard safety constraints:} Frequency must remain within $\pm 1.5$ Hz to avoid cascading failures
-    \item \textbf{Multi-agent coordination:} Non-stationarity, credit assignment, and scalability
-    \item \textbf{Capacity constraints:} Physical limits on generation and ramp rates
-\end{itemize}
-
-\subsection{Contributions}
-
-This project makes the following contributions:
-\begin{enumerate}[nosep]
-    \item A complete 20-bus power grid simulator with realistic swing equation dynamics
-    \item MAPPO implementation with CTDE for heterogeneous agent coordination
-    \item Systematic debugging methodology for reward scaling, capacity matching, and curriculum learning
-    \item Comprehensive failure mode analysis and training diagnostics
-    \item Open-source codebase with TensorBoard integration for reproducibility
-\end{enumerate}
-
-% TODO: Add final performance summary once training completes
-
+\textbf{Contributions:} (1) 20-bus power grid simulator with realistic dynamics; (2) MAPPO implementation with CTDE; (3) systematic debugging methodology for reward scaling, capacity matching, and curriculum learning; (4) analysis of multi-agent coordination challenges with experimental results.

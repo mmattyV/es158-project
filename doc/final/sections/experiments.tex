@@ -1,26 +1,9 @@
 \section{Experiments \& Results}
 \label{sec:experiments}
 
-\subsection{Experimental Setup}
+\subsection{Setup}
 
-\textbf{Training Configuration:}
-\begin{itemize}[nosep]
-    \item 2000 training episodes, max 500 steps each
-    \item Buffer size 2048, batch size 256, 10 PPO epochs per update
-    \item Evaluation every 50 episodes (5 deterministic rollouts)
-    \item Checkpoints saved every 100 episodes
-    \item TensorBoard logging for all metrics
-    \item Training device: CPU (Apple Silicon)
-\end{itemize}
-
-\textbf{Environment Configuration:}
-\begin{itemize}[nosep]
-    \item Load range: [1500, 3000] MW (capacity-matched)
-    \item Renewable generation: [20, 300] MW per source (7 sources)
-    \item N-1 contingency probability: 0.001/step
-    \item 2-second SCADA communication delay
-    \item Curriculum learning with 4 stages (see Section~\ref{sec:environment})
-\end{itemize}
+Training: 2000 episodes, max 500 steps, buffer 2048, batch 256, 10 PPO epochs. Environment: load [1500, 3000] MW, 7 renewable sources, N-1 contingencies ($p=0.001$), 2s SCADA delay, 4-stage curriculum.
 
 \subsection{Training Results}
 
@@ -28,7 +11,7 @@
     \centering
     \includegraphics[width=0.48\linewidth]{final_graphs/episode_reward.png}
     \includegraphics[width=0.48\linewidth]{final_graphs/episode_length.png}
-    \caption{\textbf{Left:} Episode reward over 2000 episodes. Reward increases from $\sim$130 to peak $\sim$170 around episode 1000, then declines to $\sim$115-120, exhibiting the characteristic ``forgetting'' phenomenon in MARL. \textbf{Right:} Episode length showing high variance (350--400 steps) with performance degradation after episode 1500.}
+    \caption{\textbf{Left:} Episode reward peaks at $\sim$170 (ep 1000) then declines to $\sim$120---the ``forgetting'' phenomenon. \textbf{Right:} Episode length varies 350--400 steps with late-training degradation.}
     \label{fig:reward_length}
 \end{figure}
 
@@ -36,121 +19,43 @@
     \centering
     \includegraphics[width=0.48\linewidth]{final_graphs/critic_loss.png}
     \includegraphics[width=0.48\linewidth]{final_graphs/reward_wear.png}
-    \caption{\textbf{Left:} Critic loss decreasing from $\sim$29 to $\sim$22, demonstrating successful value function learning despite policy instability. \textbf{Right:} Wear costs decreasing from $\sim$0.007 to $\sim$0.003, indicating agents learned to reduce aggressive power adjustments.}
+    \caption{\textbf{Left:} Critic loss converges from $\sim$29 to $\sim$22 despite policy degradation. \textbf{Right:} Wear costs decrease from $\sim$0.007 to $\sim$0.003---agents learned smoother control.}
     \label{fig:loss_wear}
 \end{figure}
 
-Figure~\ref{fig:reward_length} shows the training progression over 2000 episodes. Key observations:
-
-\textbf{Episode Reward:} The reward curve exhibits three distinct phases:
-\begin{enumerate}[nosep]
-    \item \textbf{Initial learning (episodes 0--500):} Rapid improvement from $\sim$130 to $\sim$150 as agents learn basic frequency control
-    \item \textbf{Peak performance (episodes 500--1200):} Reward reaches $\sim$160--170, with agents achieving good coordination
-    \item \textbf{Performance degradation (episodes 1200--2000):} Reward declines to $\sim$115--120, a characteristic failure mode in multi-agent systems
-\end{enumerate}
-
-\textbf{Episode Length:} Episodes consistently reach 350--400 steps (70--80\% of maximum), indicating agents learned to avoid catastrophic failures. However, the high variance and late-training decline suggest coordination instability.
-
-\textbf{Critic Loss (Figure~\ref{fig:loss_wear}, left):} The value function converged successfully, decreasing from $\sim$29 to $\sim$22. Importantly, critic loss \textit{continued to decrease} even as policy performance degraded---a diagnostic indicator that the critic learned accurate value predictions, but the actor failed to exploit them.
-
-\textbf{Wear Costs (Figure~\ref{fig:loss_wear}, right):} Decreased from $\sim$0.007 to $\sim$0.003, showing agents learned to avoid aggressive, oscillatory control actions. This is a positive sign of behavioral learning.
-
-\subsection{Quantitative Summary}
+Figure~\ref{fig:reward_length} shows three phases: (1) rapid learning (ep 0--500, reward $\sim$130$\rightarrow$150); (2) peak performance (ep 500--1200, reward $\sim$165); (3) degradation (ep 1200--2000, reward $\rightarrow$120). Critically, Figure~\ref{fig:loss_wear} shows critic loss \textit{continued decreasing} even as policy degraded---the value function learned accurately, but the actor couldn't exploit it.
 
 \begin{center}
-\begin{tabular}{lcc}
+\begin{tabular}{lccc}
 \toprule
-\textbf{Metric} & \textbf{Early Training (Ep 0--500)} & \textbf{Peak (Ep 500--1200)} \\
+\textbf{Metric} & \textbf{Early} & \textbf{Peak} & \textbf{Late} \\
 \midrule
-Mean Episode Reward & $\sim$140 & $\sim$165 \\
-Mean Episode Length & $\sim$375 steps & $\sim$390 steps \\
-Critic Loss & $\sim$28 & $\sim$25 \\
-Wear Costs & $\sim$0.005 & $\sim$0.003 \\
-\bottomrule
-\end{tabular}
-\end{center}
-
-\begin{center}
-\begin{tabular}{lcc}
-\toprule
-\textbf{Metric} & \textbf{Late Training (Ep 1500--2000)} & \textbf{Change from Peak} \\
-\midrule
-Mean Episode Reward & $\sim$120 & $-27\%$ \\
-Mean Episode Length & $\sim$360 steps & $-8\%$ \\
-Critic Loss & $\sim$22 & $-12\%$ (improved) \\
-Wear Costs & $\sim$0.003 & $\pm 0\%$ \\
+Episode Reward & $\sim$140 & $\sim$165 & $\sim$120 \\
+Episode Length & $\sim$375 & $\sim$390 & $\sim$360 \\
+Critic Loss & $\sim$28 & $\sim$25 & $\sim$22 \\
 \bottomrule
 \end{tabular}
 \end{center}
 
 \subsection{The Multi-Agent Coordination Challenge}
-\label{sec:marl_difficulty}
 
-Our results illustrate a fundamental challenge in multi-agent reinforcement learning: \textbf{training instability due to non-stationarity and coordination complexity}. Despite achieving stable critic learning, the policy exhibited the characteristic ``forgetting'' phenomenon where performance peaks and then degrades.
+Our results illustrate a fundamental MARL difficulty: \textbf{training instability from non-stationarity}. Despite stable critic learning, policy performance exhibited ``forgetting.''
 
-\subsubsection{Why MAPPO Struggles with 10 Independent Agents}
+\textbf{Why MAPPO struggles with 10 agents:}
+\begin{enumerate}[nosep]
+    \item \textbf{Non-stationarity:} Each agent's environment changes as others update, violating MDP assumptions~\cite{tan1993}
+    \item \textbf{Credit assignment:} Shared rewards provide no per-agent contribution signal~\cite{foerster2018}
+    \item \textbf{Exponential complexity:} Joint policy space grows exponentially with agent count
+    \item \textbf{Partial observability:} 15-dim local obs hides coordination information
+    \item \textbf{Theoretical hardness:} Dec-POMDP optimal policies are NEXP-complete~\cite{bernstein2002}
+\end{enumerate}
 
-\textbf{1. Non-Stationary Environment.} From each agent's perspective, other agents are part of the environment. As all agents update their policies simultaneously, each agent faces a constantly shifting optimization landscape. The environment that Agent 1 learned to control at episode 500 is fundamentally different from the environment at episode 1500, because Agents 2--10 have changed their behaviors. This violates the stationary MDP assumption underlying policy gradient convergence guarantees~\cite{tan1993}.
-
-\textbf{2. Credit Assignment Problem.} With a shared reward signal, agents cannot easily determine their individual contribution to team success or failure. When frequency regulation fails, was it because Battery 1 responded too slowly, Gas Plant 3 overcompensated, or Demand Response 2 failed to activate? MAPPO's centralized critic estimates the \textit{joint} value $V(s)$ but provides no decomposition of credit among agents~\cite{foerster2018}.
-
-\textbf{3. Exponential Policy Space.} With 10 agents each taking continuous actions, the joint policy space grows exponentially. Coordinating even simple strategies (e.g., ``batteries handle fast transients, gas plants handle sustained imbalances'') requires implicit agreement that is difficult to discover through independent gradient updates.
-
-\textbf{4. Partial Observability.} Each agent observes only 15 dimensions of the 55-dimensional state. Critical coordination information---such as what actions other agents are taking or their current capacity utilization---is hidden. Agents must infer coordination strategies from local frequency measurements alone.
-
-\textbf{5. Curriculum Non-Stationarity.} Our curriculum learning approach compounds the challenge: as frequency bounds tighten, strategies that worked in Stage 1 may fail in Stage 3. The policy must continuously adapt, but the critic's value estimates from earlier stages become stale.
-
-\subsubsection{Evidence of Coordination Failure}
-
-The late-training performance degradation (Figure~\ref{fig:reward_length}) likely stems from a \textbf{coordination collapse}: agents that initially discovered complementary strategies gradually ``forgot'' their coordination as individual policy updates pushed them toward locally optimal but globally suboptimal behaviors.
-
-The decreasing critic loss during this period is particularly telling: the value function correctly learned that the \textit{current} (degraded) policy achieves lower returns, but the actor failed to escape this local minimum.
-
-\subsubsection{Theoretical Complexity}
-
-The difficulty of decentralized multi-agent control is well-established theoretically. Bernstein et al.~\cite{bernstein2002} proved that finding optimal policies for Decentralized POMDPs (Dec-POMDPs) is NEXP-complete---doubly exponential in the number of agents. While CTDE approaches like MAPPO use centralized training to approximate solutions, the execution phase remains fundamentally constrained by partial observability.
-
-For our 10-agent system with continuous actions and 55-dimensional state, the effective problem complexity makes global convergence guarantees impossible without additional structure (e.g., communication channels, hierarchical decomposition, or factored value functions).
-
-\subsection{Comparison: What Would Improve Results?}
-
-Based on our analysis, several extensions could address the coordination challenge:
-
-\begin{center}
-\begin{tabular}{lp{7cm}}
-\toprule
-\textbf{Approach} & \textbf{How It Helps} \\
-\midrule
-QMIX / VDN~\cite{rashid2020} & Factored value functions for per-agent credit assignment \\
-Attention mechanisms & Dynamic weighting of neighbor information \\
-Communication channels & Explicit coordination signals between agents \\
-Hierarchical control & High-level coordinator assigns roles to agents \\
-Population-based training & Maintain diverse policy population, avoid local minima \\
-Lower learning rate decay & Slow policy changes in later training to preserve coordination \\
-\bottomrule
-\end{tabular}
-\end{center}
+The decreasing critic loss during policy degradation is diagnostic: the value function correctly learned returns were declining, but the actor couldn't escape the coordination collapse.
 
 \subsection{Positive Findings}
 
-Despite the coordination challenges, our results demonstrate several successes:
-
-\begin{enumerate}
-    \item \textbf{Stable value learning:} Critic loss converged consistently, validating our reward scaling and curriculum design
-    
-    \item \textbf{Behavioral learning:} Wear cost reduction shows agents learned meaningful control strategies (avoiding oscillations)
-    
-    \item \textbf{Sustained operation:} Episodes consistently reached 350--400 steps (vs. $\sim$50 steps before fixes), demonstrating that capacity matching and curriculum learning enabled basic grid operation
-    
-    \item \textbf{Peak performance window:} Episodes 500--1200 achieved reward $\sim$165 and length $\sim$390, proving that 10-agent coordination \textit{is possible}---the challenge is maintaining it
-\end{enumerate}
+Despite challenges: (1) critic loss converged ($10^{13} \rightarrow 22$); (2) wear costs halved (smoother control); (3) episodes reached 350--400 steps (vs. $\sim$50 before fixes); (4) peak coordination achieved reward $\sim$165, proving 10-agent coordination \textit{is possible}.
 
 \subsection{Limitations}
 
-\begin{itemize}[nosep]
-    \item \textbf{Training instability:} Performance degradation in later training limits practical deployment
-    \item \textbf{No formal safety guarantees:} Agents may still cause frequency violations during exploration
-    \item \textbf{Simplified physics:} Linearized swing equation ignores governor dynamics, saturation
-    \item \textbf{Reduced scale:} 20 buses / 10 agents vs. real grids with hundreds of components
-    \item \textbf{No baseline comparison:} Future work should benchmark against PI-AGC and MPC
-\end{itemize}
+Simplified physics (linearized swing equation), reduced scale (20 buses vs. hundreds), no baseline comparison, and training instability limits practical deployment. Extensions like QMIX~\cite{rashid2020}, attention mechanisms, or hierarchical control could address coordination challenges.

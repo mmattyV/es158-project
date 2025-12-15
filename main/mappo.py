@@ -31,9 +31,9 @@ class MAPPO:
         Initialize MAPPO agent.
         
         Args:
-            n_agents: Number of agents (20)
+            n_agents: Number of agents (10)
             obs_dim: Observation dimension per agent (15)
-            state_dim: Full state dimension (140)
+            state_dim: Full state dimension (55)
             action_dim: Action dimension per agent (1)
             lr_actor: Learning rate for actor
             lr_critic: Learning rate for critic
